@@ -1,0 +1,15 @@
+# Runtime and personal data must never enter the public repository.
+config.json
+this-computer.json
+state.json
+*.pending
+*.download
+*.msi
+*.wfw
+*.zip
+*.log
+LaunchTickets/
+ClaudeHappBackups/
+ClaudeHappReports/
+backups/
+reports/

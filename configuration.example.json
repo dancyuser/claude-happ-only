@@ -1,0 +1,17 @@
+{
+  "Schema": 3,
+  "UpstreamHostname": "YOUR-SERVER.example.com",
+  "UpstreamAddress": "",
+  "UpstreamPort": 443,
+  "ProxyPort": 10808,
+  "ExpectedCountry": "DE",
+  "PhysicalInterface": "Ethernet",
+  "XrayPath": "C:\\Program Files\\FlyFrogLLC\\Happ\\core\\xray.exe",
+  "PackageFamily": "Claude_pzs8sxrjxfjjc",
+  "ClaudeRoot": "",
+  "ClaudeExe": "",
+  "BlockedInterfaces": [],
+  "UseLegacyTag": false,
+  "LaunchUserSid": "REPLACE-WITH-YOUR-USER-SID",
+  "ShortcutPath": "C:\\Users\\YOUR-USER\\Desktop\\Claude - Happ Only.lnk"
+}
