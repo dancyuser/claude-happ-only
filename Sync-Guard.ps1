@@ -24,7 +24,7 @@ try{
  if($Mode -eq 'Sync'){$wfp.Begin()}
  foreach($key in $obsolete){if($Mode -eq 'Verify'){throw 'Stale Xray upstream filter'};$wfp.Delete($key)}
  foreach($file in $inventory.Files){$keys+=@($wfp.RestrictProgram($file.FullName,'127.0.0.1',$port,$true))}
- if($config.UseLegacyTag){if($port -ne 10808){throw 'Legacy tag supports port 10808 only'};$keys+=@($wfp.RestrictTag($true))}
+ if($config.UseLegacyTag){$keys+=@($wfp.RestrictTag($port,$true))}
  $keys+=@($wfp.RestrictProgram($config.XrayPath,$endpoint,[int]$config.UpstreamPort,$true));$keys+=@($wfp.ReservePort($config.XrayPath,$port,$true));$keys=@($keys | Sort-Object -Unique)
  if($Mode -eq 'Verify'){
   if(@(Get-NetFirewallProfile -PolicyStore ActiveStore | Where-Object {[string]$_.Enabled -ne 'True'}).Count){throw 'Firewall profile disabled'}

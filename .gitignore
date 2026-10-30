@@ -13,3 +13,8 @@ ClaudeHappBackups/
 ClaudeHappReports/
 backups/
 reports/
+*.cip
+AppIdPrepared*/
+prepared.json
+appid-coverage.json
+installation-receipt.json

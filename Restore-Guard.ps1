@@ -52,7 +52,7 @@ try{
  # Atomically restore old WFP records and include current installed Claude versions under old settings.
  $native.Begin();foreach($f in $native.ExportOwned()){$native.Delete($f.Key)};foreach($f in $saved){$native.ImportOwned($f)}
  $keys=@($saved.Key);foreach($file in $inventory.Files){$keys+=@($native.RestrictProgram($file.FullName,'127.0.0.1',[int]$target.ProxyPort,$true))}
- if($target.UseLegacyTag){$keys+=@($native.RestrictTag($true))};$keys+=@($native.RestrictProgram($target.XrayPath,$target.UpstreamAddress,[int]$target.UpstreamPort,$true));$keys+=@($native.ReservePort($target.XrayPath,[int]$target.ProxyPort,$true))
+ if($target.UseLegacyTag){$keys+=@($native.RestrictTag([int]$target.ProxyPort,$true))};$keys+=@($native.RestrictProgram($target.XrayPath,$target.UpstreamAddress,[int]$target.UpstreamPort,$true));$keys+=@($native.ReservePort($target.XrayPath,[int]$target.ProxyPort,$true))
  $state=Get-Content -Raw "$root\state.json" | ConvertFrom-Json;$state.Keys=@($keys | Sort-Object -Unique);$state.Executables=@($inventory.Files.FullName);$state | Add-Member NoteProperty LaunchExecutable $inventory.Executable -Force;$state | Add-Member NoteProperty RestoredFrom $BackupId -Force
  Save-JSON $state "$root\state.json.pending";$native.Commit();$gated=$false;Move-Item "$root\state.json.pending" "$root\state.json" -Force
  $native.Dispose();$native=$null

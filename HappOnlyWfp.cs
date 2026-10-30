@@ -51,12 +51,14 @@ public sealed class HappOnlyWfp : IDisposable {
   IntPtr id;Check(FwpmGetAppIdFromFileName0(path,out id),"GetAppId");
   try{return Restrict("program:"+path.ToLowerInvariant(),new Condition{key=App,value=new Value{type=12,ptr=id}},remote,port,persist);}finally{FwpmFreeMemory0(ref id);}
  }
- public string[] RestrictTag(bool persist){
+ public string[] RestrictTag(bool persist){return RestrictTag(10808,persist);}
+ public string[] RestrictTag(int proxyPort,bool persist){
+  if(proxyPort<1||proxyPort>65535)throw new ArgumentOutOfRangeException("proxyPort");
   var sd=new RawSecurityDescriptor("D:(XA;;CC;;;WD;(Exists POLICYAPPID://ClaudeProxyOnly))");
   var bytes=new byte[sd.BinaryLength];sd.GetBinaryForm(bytes,0);
   IntPtr data=Marshal.AllocHGlobal(bytes.Length),blob=Marshal.AllocHGlobal(Marshal.SizeOf(typeof(Blob)));
   try{Marshal.Copy(bytes,0,data,bytes.Length);Marshal.StructureToPtr(new Blob{size=(uint)bytes.Length,data=data},blob,false);
-   return Restrict("tag:ClaudeProxyOnly",new Condition{key=User,value=new Value{type=14,ptr=blob}},"127.0.0.1",10808,persist);
+   return Restrict("tag:ClaudeProxyOnly",new Condition{key=User,value=new Value{type=14,ptr=blob}},"127.0.0.1",proxyPort,persist);
   }finally{Marshal.FreeHGlobal(blob);Marshal.FreeHGlobal(data);}
  }
  public string ReservePort(string ownerPath,int port,bool persist){
