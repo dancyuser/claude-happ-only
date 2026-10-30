@@ -4,6 +4,7 @@
 $ErrorActionPreference='Stop'
 . "$PSScriptRoot\Common.ps1"
 . "$PSScriptRoot\BackupRestore.ps1"
+. "$PSScriptRoot\AppId.Runtime.ps1"
 $root=Get-GuardRoot
 $configPath="$root\config.json";if($SetupConfigFile){$configPath=$SetupConfigFile}
 $config=Read-GuardConfig $configPath;$xray=$config.XrayPath;$port=[int]$config.ProxyPort
@@ -74,7 +75,7 @@ try {
   if($PSScriptRoot -ne $root){
    $manifest=Get-Content -Raw "$PSScriptRoot\payload-hashes.json" | ConvertFrom-Json
    foreach($item in $manifest){if((Get-FileHash -LiteralPath (Join-Path $PSScriptRoot $item.Name)).Hash -ne $item.SHA256){throw ('Kit checksum mismatch: '+$item.Name)}}
-   foreach($name in @('HappOnlyWfp.cs','Sync-Guard.ps1','Run-Sync.ps1','DirectDoh.cs','Manage-Happ.ps1','Test-Protected.ps1','Start.ps1','Common.ps1','Preflight.ps1','Launch-Checked.ps1','BackupRestore.ps1','WfpSnapshot.cs','Restore-Guard.ps1','Restore-Entry.ps1','CodeProxy.Common.ps1','Configure-CodeProxy.ps1')){Copy-Item -LiteralPath "$PSScriptRoot\$name" -Destination "$root\$name" -Force}
+   foreach($name in @('HappOnlyWfp.cs','Sync-Guard.ps1','Run-Sync.ps1','DirectDoh.cs','Manage-Happ.ps1','Test-Protected.ps1','Start.ps1','Common.ps1','Preflight.ps1','Launch-Checked.ps1','BackupRestore.ps1','WfpSnapshot.cs','Restore-Guard.ps1','Restore-Entry.ps1','CodeProxy.Common.ps1','Configure-CodeProxy.ps1','AppId.Runtime.ps1','AppId.Deployment.ps1','AppIdTokenReader.cs','Test-AppIdCoverage.ps1','Watch-AppIdCoverage.ps1')){Copy-Item -LiteralPath "$PSScriptRoot\$name" -Destination "$root\$name" -Force}
    $config | ConvertTo-Json -Depth 5 | Set-Content "$root\config.json" -Encoding UTF8
   }
   # Remove explicit writable ACLs from files left by an earlier/manual installation.
@@ -169,6 +170,7 @@ try {
   }catch{$issues.Add('PROBE: '+$_.Exception.Message+'. See run.log and experiment.json.')}}
  }
  No-Claude
+ try{Assert-ActiveAppId $config}catch{$issues.Add('APPID: '+$_.Exception.Message)}
  $result['Issues']=@($issues.ToArray());if($issues.Count -eq 0){$result.Status='OK'}
  if($Mode -ne 'Diagnose' -and $result.Status -eq 'OK' -and (Test-Path "$root\maintenance.txt")){Clear-RestoreGate $config;Remove-Item -LiteralPath "$root\maintenance.txt" -Force}
 }catch{$issues.Add($_.Exception.Message);$result['Issues']=@($issues.ToArray());throw}

@@ -1,5 +1,5 @@
 ﻿#requires -Version 5.1
-param([string]$ConfigurationFile,[switch]$InstallBrowserTamer,[switch]$Preview)
+param([string]$ConfigurationFile,[switch]$InstallBrowserTamer,[switch]$Preview,[ValidateSet('Auto','Off','Require')][string]$AppIdMode,[switch]$NoWatch)
 $ErrorActionPreference='Stop'
 . "$PSScriptRoot\Common.ps1";. "$PSScriptRoot\Setup.Common.ps1"
 function Ask($Label,$Default){$answer=Read-Host ($Label+$(if($Default){' ['+$Default+']'}));if([string]::IsNullOrWhiteSpace($answer)){return $Default};return $answer}
@@ -11,7 +11,9 @@ try{
  $installed=Join-Path (Get-GuardRoot) 'config.json'
  if(-not $ConfigurationFile -and -not $Preview -and (Test-Path -LiteralPath $installed)){
   Write-Host 'Обнаружена установленная защита. Обновление сохранит ее параметры и завершится CheckOnly.'
-  & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot\Update-CodeSupport.ps1"
+  $updateArgs=@('-NoProfile','-ExecutionPolicy','Bypass','-File',"$PSScriptRoot\Update-CodeSupport.ps1")
+  if($AppIdMode){$updateArgs+=@('-AppIdMode',$AppIdMode)};if($NoWatch){$updateArgs+='-NoWatch'}
+  & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" @updateArgs
   exit $LASTEXITCODE
  }
  $networks=@();try{$networks=@(Get-SetupNetworkChoices)}catch{Write-Host 'Автоопределение адаптера недоступно; укажите его имя вручную.'}
@@ -46,22 +48,19 @@ try{
   }
  }
  $c=Complete-SetupConfiguration $inputConfig $defaults
+ if($AppIdMode){$c | Add-Member NoteProperty AppIdMode $AppIdMode -Force}
  $temp=Join-Path $env:TEMP ('ClaudeHapp-Setup-'+[guid]::NewGuid().ToString('N')+'.json')
  $c | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $temp -Encoding UTF8
  $c=Read-GuardConfig $temp
  if($Preview){$c | ConvertTo-Json -Depth 20;$code=0}
  else{
   Assert-NoClaudeClient
-  Write-Host ('Проверка и установка: '+$c.EndpointMode+'; адаптер '+$c.PhysicalInterface+'; прокси 127.0.0.1:'+$c.ProxyPort+'; страна '+$c.ExpectedCountry)
-  $arguments='-NoProfile -ExecutionPolicy Bypass -File "'+$PSScriptRoot+'\Install-Elevated.ps1" -ConfigurationFile "'+$temp+'"'
-  $code=Invoke-ElevatedPowerShell $arguments
-  if($code -ne 0){throw 'Установка защиты не завершена. Смотрите отчет в ProgramData\ClaudeHappReports.'}
-  $codeProxy=& "$PSScriptRoot\Configure-CodeProxy.ps1" -Mode Apply -ProxyPort ([int]$c.ProxyPort) -ExpectedCountry $c.ExpectedCountry
-  if(-not $codeProxy.SettingsOK){throw 'Не удалось настроить HTTP-прокси Code.'}
-  Write-Host ('Резервная копия настроек Code: '+$codeProxy.BackupDirectory)
-  Write-Host 'Итоговая проверка CheckOnly: еще один UAC, Claude не запускается.'
-  & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File (Join-Path (Get-GuardRoot) 'Launch-Checked.ps1') -CheckOnly -NoPause
-  if($LASTEXITCODE -ne 0){throw 'Итоговая проверка не прошла. Claude не запущен.'}
+  Write-Host ('Установка: '+$c.EndpointMode+'; '+$c.PhysicalInterface+'; прокси 127.0.0.1:'+$c.ProxyPort+'; AppID='+$c.AppIdMode)
+  $installArgs=@('-NoProfile','-ExecutionPolicy','Bypass','-File',"$PSScriptRoot\Install-Automated.ps1",'-ConfigurationFile',$temp,'-Mode','Install','-AppIdMode',$c.AppIdMode)
+  if($NoWatch){$installArgs+='-NoWatch'}
+  & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" @installArgs
+  $code=$LASTEXITCODE
+  if($code -ne 0){throw 'Автоматическая установка не завершена; смотрите указанный отчет транзакции.'}
   $installBT=$InstallBrowserTamer.IsPresent
   if(-not $ConfigurationFile -and -not $installBT){$installBT=(Ask 'Установить необязательный Browser Tamer для ссылок в отдельный профиль? y/N' 'N') -match '^[yY]'}
   if($installBT){& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot\Install-BrowserTamer.ps1";if($LASTEXITCODE -ne 0){throw 'Защита установлена, но установка Browser Tamer не завершена.'}}

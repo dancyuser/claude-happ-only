@@ -5,6 +5,9 @@ function Read-GuardConfig([string]$path){
  foreach($key in $defaults.Keys){if(-not $c.PSObject.Properties[$key]){$c | Add-Member NoteProperty $key $defaults[$key]}}
  if(-not $c.PSObject.Properties['CodeRoot']){$c | Add-Member NoteProperty CodeRoot ''}
  if(-not $c.PSObject.Properties['EndpointMode']){$c | Add-Member NoteProperty EndpointMode 'Hostname'}
+ if(-not $c.PSObject.Properties['AppIdRequired']){$c | Add-Member NoteProperty AppIdRequired $false}
+ if(-not $c.PSObject.Properties['AppIdMode']){$c | Add-Member NoteProperty AppIdMode 'Auto'}
+ if($c.AppIdRequired -isnot [bool] -or $c.AppIdMode -notin @('Auto','Off','Require')){throw 'Invalid AppID configuration'}
  if(-not $c.PhysicalInterface){throw 'PhysicalInterface is required'}
  if($c.EndpointMode -notin @('Hostname','PinnedIPv4')){throw 'EndpointMode must be Hostname or PinnedIPv4'}
  if($c.EndpointMode -eq 'Hostname'){
@@ -96,4 +99,20 @@ function Get-OtherPorts([int]$port){if($port -gt 1){'1-'+($port-1)};if($port -lt
 function Invoke-ElevatedPowerShell([string]$arguments){
  $info=New-Object Diagnostics.ProcessStartInfo;$info.FileName="$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe";$info.Arguments=$arguments;$info.UseShellExecute=$true;$info.Verb='runas'
  $process=[Diagnostics.Process]::Start($info);$null=$process.Handle;$process.WaitForExit();$code=$process.ExitCode;$process.Dispose();return [int]$code
+}
+function Read-ValidatedLaunchTicket([guid]$RequestId,$Configuration){
+ $root=Get-GuardRoot;$path=Join-Path $root ('LaunchTickets\'+$RequestId+'.json')
+ $t=Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+ $age=([DateTime]::UtcNow-[DateTime]::Parse($t.FinishedUTC).ToUniversalTime()).TotalSeconds
+ $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+ if(-not $t.OK -or $t.RequestId -ne $RequestId.ToString() -or $t.UserSid -ne $sid -or $Configuration.LaunchUserSid -ne $sid -or $age -lt 0 -or $age -gt 30 -or $t.ConfigSHA256 -ne (Get-FileHash "$root\config.json").Hash){throw 'Invalid, stale or mismatched preflight result'}
+ $state=Get-Content "$root\state.json" -Raw | ConvertFrom-Json
+ if(Test-Path "$root\maintenance.txt"){throw 'Restore/maintenance incomplete'}
+ if($t.Executable -ne $state.LaunchExecutable -or $t.Executable -notin $state.Executables -or -not(Test-Path -LiteralPath $t.Executable) -or [IO.Path]::GetFileName($t.Executable) -ne 'claude.exe'){throw 'Executable changed after preflight'}
+ if($Configuration.AppIdRequired){if(-not $t.AppIdSHA256 -or $t.AppIdSHA256 -ne (Get-FileHash "$root\AppId-state.json").Hash){throw 'AppID state changed after preflight'}}
+ return $t
+}
+function Start-CoverageObserver {
+ $root=Get-GuardRoot
+ Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$root+'\Watch-AppIdCoverage.ps1"') -WindowStyle Hidden
 }

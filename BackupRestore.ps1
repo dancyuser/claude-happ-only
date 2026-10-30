@@ -1,5 +1,5 @@
 ﻿# Backup/restore only the Claude-Happ guard. No whole-firewall import is performed.
-$script:GuardFiles=@('Common.ps1','HappOnlyWfp.cs','WfpSnapshot.cs','Sync-Guard.ps1','Run-Sync.ps1','Manage-Happ.ps1','DirectDoh.cs','Test-Protected.ps1','Start.ps1','Preflight.ps1','Launch-Checked.ps1','BackupRestore.ps1','Restore-Guard.ps1','Restore-Entry.ps1','CodeProxy.Common.ps1','Configure-CodeProxy.ps1','config.json','state.json')
+$script:GuardFiles=@('Common.ps1','HappOnlyWfp.cs','WfpSnapshot.cs','Sync-Guard.ps1','Run-Sync.ps1','Manage-Happ.ps1','DirectDoh.cs','Test-Protected.ps1','Start.ps1','Preflight.ps1','Launch-Checked.ps1','BackupRestore.ps1','Restore-Guard.ps1','Restore-Entry.ps1','CodeProxy.Common.ps1','Configure-CodeProxy.ps1','AppId.Runtime.ps1','AppId.Deployment.ps1','AppIdTokenReader.cs','Test-AppIdCoverage.ps1','Watch-AppIdCoverage.ps1','AppId-state.json','config.json','state.json')
 $script:GuardRules=@('Happ-Xray-Block-FlClashX','Happ-Xray-Lock-OtherIPv4','Happ-Xray-Lock-OtherTCPPorts','Happ-Xray-Lock-EndpointUDP','Happ-Xray-Lock-IPv6')
 function Set-ProtectedDirectory([string]$path){
  New-Item -ItemType Directory -Path $path -Force | Out-Null

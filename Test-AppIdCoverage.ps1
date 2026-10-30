@@ -6,12 +6,14 @@ $root=Get-GuardRoot;$c=Read-GuardConfig "$root\config.json"
 $state=Get-Content "$root\state.json" -Raw | ConvertFrom-Json
 if(-not ('ReadAppIdToken' -as [type])){Add-Type -Path "$PSScriptRoot\AppIdTokenReader.cs"}
 $processes=@(Get-CimInstance Win32_Process)
-$seeds=@($processes | Where-Object {$_.Name -ieq 'claude.exe' -and $_.ExecutablePath -and ($_.ExecutablePath -in $state.Executables -or ($c.CodeRoot -and $_.ExecutablePath.StartsWith(([string]$c.CodeRoot).TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)))})
+$seeds=@($processes | Where-Object {$_.Name -ieq 'claude.exe' -and (-not $_.ExecutablePath -or $_.ExecutablePath -in $state.Executables -or ($c.CodeRoot -and $_.ExecutablePath.StartsWith(([string]$c.CodeRoot).TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)))})
 $ids=@($seeds.ProcessId)
 do{$next=@($processes | Where-Object {$_.ParentProcessId -in $ids -and $_.ProcessId -notin $ids});$ids+=@($next.ProcessId)}while($next.Count)
 $rows=@(foreach($process in ($processes | Where-Object {$_.ProcessId -in $ids})){
  $r=[ReadAppIdToken]::Query([int]$process.ProcessId)
- [pscustomobject]@{Name=$process.Name;ProcessId=$process.ProcessId;ParentProcessId=$process.ParentProcessId;HasClaudeTag=$r.HasTag;TagValue=$r.TagValue;AttributeFlags=$r.Flags;NonInheritable=$r.NonInheritable;Error=$r.Error}
+ $readError=$r.Error
+ if($process.Name -ieq 'claude.exe' -and -not $process.ExecutablePath){$readError='Process identity could not be verified; '+$readError}
+ [pscustomobject]@{Name=$process.Name;ProcessId=$process.ProcessId;ParentProcessId=$process.ParentProcessId;HasClaudeTag=$r.HasTag;TagValue=$r.TagValue;AttributeFlags=$r.Flags;NonInheritable=$r.NonInheritable;Error=$readError}
 })
 $unknown=@($rows | Where-Object {$_.Error}).Count
 $untagged=@($rows | Where-Object {-not $_.Error -and -not $_.HasClaudeTag}).Count

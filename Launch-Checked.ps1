@@ -16,9 +16,7 @@ try{
  $exit=Invoke-ElevatedPowerShell ('-NoProfile -ExecutionPolicy Bypass -File "'+$root+'\Preflight.ps1" -RequestId '+$id)
  $path=Join-Path $root ('LaunchTickets\'+$id+'.json')
  if($exit -ne 0 -or -not(Test-Path -LiteralPath $path)){throw ('Preflight failed/cancelled. Claude will NOT start. Ticket: '+$path)}
- $t=Get-Content -Raw -LiteralPath $path | ConvertFrom-Json
- $age=([DateTime]::UtcNow-[DateTime]::Parse($t.FinishedUTC).ToUniversalTime()).TotalSeconds
- if(-not $t.OK -or $t.RequestId -ne $id.ToString() -or $t.UserSid -ne $userSid -or $age -lt 0 -or $age -gt 30 -or $t.ConfigSHA256 -ne (Get-FileHash "$root\config.json").Hash){throw 'Invalid, stale, or mismatched preflight result'}
+ $t=Read-ValidatedLaunchTicket $id $c
  $state=Get-Content -Raw "$root\state.json" | ConvertFrom-Json
  if(Test-Path "$root\maintenance.txt"){throw 'Restore/maintenance incomplete. Finish Restore or Fix successfully before launch.'}
  if($t.Executable -ne $state.LaunchExecutable -or $t.Executable -notin $state.Executables -or -not(Test-Path -LiteralPath $t.Executable) -or [IO.Path]::GetFileName($t.Executable) -ne 'claude.exe'){throw 'Claude installation changed after check; run again'}
@@ -34,6 +32,7 @@ try{
   $proxyEnv=Get-CodeProxyEnvironment ([int]$c.ProxyPort)
   foreach($key in $proxyEnv.Keys){$si.EnvironmentVariables[$key]=$proxyEnv[$key]}
   $process=[Diagnostics.Process]::Start($si);$process.Dispose()
+  try{Start-CoverageObserver}catch{Write-Warning ('Coverage observer unavailable: '+$_.Exception.Message)}
   $code=0
  }
 }catch{Write-Host ('CLAUDE NOT STARTED: '+$_.Exception.Message) -ForegroundColor Red}

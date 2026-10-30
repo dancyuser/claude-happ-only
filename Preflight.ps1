@@ -21,6 +21,7 @@ try{
  Assert-NoClaude
  $c=Read-GuardConfig "$root\config.json";$state=Get-Content -Raw "$root\state.json" | ConvertFrom-Json
  $ticket.UserSid=$c.LaunchUserSid;$ticket.Executable=$state.LaunchExecutable;$ticket.ConfigSHA256=(Get-FileHash "$root\config.json").Hash
+ if($c.AppIdRequired){$ticket['AppIdSHA256']=(Get-FileHash "$root\AppId-state.json").Hash}
  $ticket.OK=$true;$code=0
 }catch{$ticket.Error=$_.Exception.Message;Write-Host $ticket.Error -ForegroundColor Red}
 finally{
