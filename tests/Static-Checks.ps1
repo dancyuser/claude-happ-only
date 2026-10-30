@@ -14,6 +14,10 @@ if((@(Get-OtherPorts 443)-join ',') -ne '1-442,444-65535'){throw 'Port complemen
 if((@(Get-OtherPorts 1)-join ',') -ne '2-65535'){throw 'Lower port bound mismatch'}
 if((@(Get-OtherPorts 65535)-join ',') -ne '1-65534'){throw 'Upper port bound mismatch'}
 & "$PSScriptRoot\Test-ServiceGuard.ps1"
+& "$PSScriptRoot\Test-CodeProxy.ps1"
+& "$PSScriptRoot\Test-CodeCache.ps1"
+& "$PSScriptRoot\Test-UserMaintenanceGuard.ps1"
+& "$PSScriptRoot\Test-SetupConfiguration.ps1"
 foreach($item in (Get-Content -Raw "$root\payload-hashes.json" | ConvertFrom-Json)){
  $path=Join-Path $root $item.Name;if((Get-FileHash -LiteralPath $path).Hash -ne $item.SHA256){throw ('Payload checksum mismatch: '+$item.Name)}
 }

@@ -1,0 +1,11 @@
+{
+  "EndpointMode": "PinnedIPv4",
+  "UpstreamHostname": "",
+  "UpstreamAddress": "REPLACE-WITH-PUBLIC-SERVER-IPV4",
+  "UpstreamPort": 443,
+  "ProxyPort": 10808,
+  "ExpectedCountry": "DE",
+  "PhysicalInterface": "",
+  "BlockedInterfaces": [],
+  "UseLegacyTag": false
+}

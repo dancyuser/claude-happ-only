@@ -4,3 +4,6 @@
 *.md text eol=lf
 *.json text eol=crlf
 *.txt text eol=lf
+.gitattributes text eol=lf
+.gitignore text eol=lf
+VERSION text eol=lf

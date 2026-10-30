@@ -9,6 +9,9 @@ try{
  if($admin){throw 'Run this shortcut normally, not as Administrator. Claude must use the ordinary user token.'}
  $root=Get-GuardRoot;$c=Read-GuardConfig "$root\config.json";$userSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
  if($userSid -ne $c.LaunchUserSid){throw 'Shortcut belongs to a different configured user'}
+ if(@(Get-Process -Name claude -ErrorAction SilentlyContinue).Count){throw 'Close Claude yourself before checked launch or CheckOnly'}
+ $codeProxy=& "$root\Configure-CodeProxy.ps1" -Mode Diagnose -ProxyPort $c.ProxyPort -ExpectedCountry $c.ExpectedCountry
+ if(-not $codeProxy.OverallOK){throw 'Code HTTP proxy/settings check failed. Run Configure-CodeProxy.ps1 -Mode Apply in ordinary PowerShell after closing Claude. No launch approval issued.'}
  $id=[Guid]::NewGuid();Write-Host 'Checking tunnel. A UAC request will open for checks/repair only. Claude is not running yet.'
  $exit=Invoke-ElevatedPowerShell ('-NoProfile -ExecutionPolicy Bypass -File "'+$root+'\Preflight.ps1" -RequestId '+$id)
  $path=Join-Path $root ('LaunchTickets\'+$id+'.json')
@@ -24,7 +27,13 @@ try{
  if($CheckOnly){Write-Host ('CHECK ONLY PASS. Claude NOT started. '+$path);$code=0}
  else{
   $arguments='--proxy-server=socks5://127.0.0.1:'+$c.ProxyPort+' --proxy-bypass-list=<-loopback> --disable-quic'
-  Start-Process -FilePath $t.Executable -ArgumentList $arguments -WorkingDirectory (Split-Path $t.Executable -Parent)
+  # Native child processes inherit proxy env; Code settings are also checked above.
+  . "$root\CodeProxy.Common.ps1"
+  $si=New-Object Diagnostics.ProcessStartInfo
+  $si.FileName=$t.Executable;$si.Arguments=$arguments;$si.WorkingDirectory=Split-Path $t.Executable -Parent;$si.UseShellExecute=$false
+  $proxyEnv=Get-CodeProxyEnvironment ([int]$c.ProxyPort)
+  foreach($key in $proxyEnv.Keys){$si.EnvironmentVariables[$key]=$proxyEnv[$key]}
+  $process=[Diagnostics.Process]::Start($si);$process.Dispose()
   $code=0
  }
 }catch{Write-Host ('CLAUDE NOT STARTED: '+$_.Exception.Message) -ForegroundColor Red}

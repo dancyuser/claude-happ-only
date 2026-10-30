@@ -18,7 +18,10 @@ try{
   $marker='name=Claude-Happ-Only: program:'+$config.XrayPath.ToLowerInvariant()+'|v4-address|'
   if($description.Contains($marker) -and -not $description.EndsWith('|'+$endpoint)){$obsolete+=@($key)}else{$keys+=@($key)}
  }}
- $wfp.Begin()
+ # Verification must not hold a WFP write transaction while querying Firewall
+ # through CIM: the provider may wait for the same transaction to finish.
+ # VerifyOnly makes Restrict*/ReservePort read-only and rejects missing filters.
+ if($Mode -eq 'Sync'){$wfp.Begin()}
  foreach($key in $obsolete){if($Mode -eq 'Verify'){throw 'Stale Xray upstream filter'};$wfp.Delete($key)}
  foreach($file in $inventory.Files){$keys+=@($wfp.RestrictProgram($file.FullName,'127.0.0.1',$port,$true))}
  if($config.UseLegacyTag){if($port -ne 10808){throw 'Legacy tag supports port 10808 only'};$keys+=@($wfp.RestrictTag($true))}

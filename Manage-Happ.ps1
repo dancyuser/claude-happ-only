@@ -7,8 +7,10 @@ $ErrorActionPreference='Stop'
 $root=Get-GuardRoot
 $configPath="$root\config.json";if($SetupConfigFile){$configPath=$SetupConfigFile}
 $config=Read-GuardConfig $configPath;$xray=$config.XrayPath;$port=[int]$config.ProxyPort
+$previousPin=[string]$config.UpstreamAddress
 if($SetupConfigFile -and (Test-Path "$root\state.json")){
  $previous=Read-GuardConfig "$root\config.json"
+ $previousPin=[string]$previous.UpstreamAddress
  if($previous.ProxyPort -ne $port -or $previous.XrayPath -ne $xray -or $previous.UpstreamPort -ne $config.UpstreamPort){throw 'Existing guard uses another port/core path. Migration requires reviewing old filters; fresh installs support configurable values.'}
 }
 $out=Join-Path $env:ProgramData ('ClaudeHappReports\'+(Get-Date -Format 'yyyyMMdd-HHmmss-fff'))
@@ -18,6 +20,21 @@ Start-Transcript -Path "$out\run.log" | Out-Null
 $issues=New-Object 'Collections.Generic.List[string]';$mutex=$null;$locked=$false;$task=$null;$resumeTask=$false;$taskBeforeXml='';$backup=$null
 $result=[ordered]@{Time=(Get-Date).ToString('o');Mode=$Mode;Status='FAIL';ClaudeLaunched=$false;Issues=@();Report=$out}
 function No-Claude {Assert-NoClaude -Configuration $config}
+function Verify-GuardBounded {
+ $si=New-Object Diagnostics.ProcessStartInfo
+ $si.FileName="$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+ $si.Arguments='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$root+'\Sync-Guard.ps1" -Mode Verify'
+ $si.UseShellExecute=$false;$si.CreateNoWindow=$true;$si.RedirectStandardOutput=$true;$si.RedirectStandardError=$true
+ $p=New-Object Diagnostics.Process;$p.StartInfo=$si
+ Write-Host 'Checking static WFP/firewall state (45 second limit)...'
+ try{
+  $null=$p.Start();$stdout=$p.StandardOutput.ReadToEndAsync();$stderr=$p.StandardError.ReadToEndAsync()
+  if(-not $p.WaitForExit(45000)){$p.Kill();$p.WaitForExit();throw 'STATIC_VERIFY_TIMEOUT after 45 seconds; only the verification worker was stopped. No launch approval.'}
+  $stdout.Result | Set-Content "$out\verify.log" -Encoding UTF8
+  $stderr.Result | Set-Content "$out\verify-error.log" -Encoding UTF8
+  if($p.ExitCode -ne 0 -or $stdout.Result -notmatch 'STATIC VERIFY PASS'){throw ('Static verification failed. '+$stderr.Result.Trim())}
+ }finally{$p.Dispose()}
+}
 function Register-GuardTask {
  $action=New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument ('-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "'+$root+'\Run-Sync.ps1"')
  $triggers=@((New-ScheduledTaskTrigger -AtStartup),(New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1)))
@@ -57,7 +74,7 @@ try {
   if($PSScriptRoot -ne $root){
    $manifest=Get-Content -Raw "$PSScriptRoot\payload-hashes.json" | ConvertFrom-Json
    foreach($item in $manifest){if((Get-FileHash -LiteralPath (Join-Path $PSScriptRoot $item.Name)).Hash -ne $item.SHA256){throw ('Kit checksum mismatch: '+$item.Name)}}
-   foreach($name in @('HappOnlyWfp.cs','Sync-Guard.ps1','Run-Sync.ps1','DirectDoh.cs','Manage-Happ.ps1','Test-Protected.ps1','Start.ps1','Common.ps1','Preflight.ps1','Launch-Checked.ps1','BackupRestore.ps1','WfpSnapshot.cs','Restore-Guard.ps1','Restore-Entry.ps1')){Copy-Item -LiteralPath "$PSScriptRoot\$name" -Destination "$root\$name" -Force}
+   foreach($name in @('HappOnlyWfp.cs','Sync-Guard.ps1','Run-Sync.ps1','DirectDoh.cs','Manage-Happ.ps1','Test-Protected.ps1','Start.ps1','Common.ps1','Preflight.ps1','Launch-Checked.ps1','BackupRestore.ps1','WfpSnapshot.cs','Restore-Guard.ps1','Restore-Entry.ps1','CodeProxy.Common.ps1','Configure-CodeProxy.ps1')){Copy-Item -LiteralPath "$PSScriptRoot\$name" -Destination "$root\$name" -Force}
    $config | ConvertTo-Json -Depth 5 | Set-Content "$root\config.json" -Encoding UTF8
   }
   # Remove explicit writable ACLs from files left by an earlier/manual installation.
@@ -76,21 +93,24 @@ try {
  if($gateway.Count -ne 1 -or $local.Count -ne 1){throw 'Ethernet needs exactly one IPv4 address and gateway. Check Windows adapter settings.'}
  Add-Type -Path "$PSScriptRoot\DirectDoh.cs"
  Add-Type -Path "$root\HappOnlyWfp.cs"
- $answers=@();$dnsOK=$false
- try{
+ $answers=@();$dnsOK=$false;$endpointOK=$false
+ if($config.EndpointMode -eq 'PinnedIPv4'){
+  $ip=[string]$config.UpstreamAddress;$endpointOK=$true
+ }else{try{
   foreach($dns in @(@('1.1.1.1','cloudflare-dns.com','/dns-query?name='),@('8.8.8.8','dns.google','/resolve?name='))){
    $j=[DirectDoh]::Query($dns[0],$dns[1],($dns[2]+$config.UpstreamHostname+'&type=A'),$nic.ifIndex,$local[0]) | ConvertFrom-Json
    $a=@($j.Answer | Where-Object type -eq 1 | Select-Object -ExpandProperty data -Unique)
    if($j.Status -ne 0 -or $a.Count -ne 1){throw 'DNS response is not one unique IPv4 address'}
    $answers+=@([string]$a[0])
   }
-  $ip=$answers[0];$b=[Net.IPAddress]::Parse($ip).GetAddressBytes()
-  if($answers[0] -ne $answers[1] -or $b.Length -ne 4 -or ($b[0] -in @(0,10,127) -or ($b[0] -eq 169 -and $b[1] -eq 254) -or ($b[0] -eq 172 -and $b[1] -ge 16 -and $b[1] -le 31) -or ($b[0] -eq 192 -and $b[1] -eq 168) -or ($b[0] -eq 198 -and $b[1] -in @(18,19)) -or ($b[0] -eq 100 -and $b[1] -ge 64 -and $b[1] -le 127)) -or $b[0] -ge 224){throw 'DNS disagreement or unsupported/non-public answer; no pin update'}
-  $dnsOK=$true
- }catch{$issues.Add('DNS_UNVERIFIED: '+$_.Exception.Message+'. Keep current pin; check Ethernet/DNS HTTPS and retry Fix.cmd.');$ip=[string]$config.UpstreamAddress}
- $result['DNSVerified']=$dnsOK;$result['ResolvedAddress']=$ip;$result['PreviousPin']=$config.UpstreamAddress
+  $ip=$answers[0]
+  if($answers[0] -ne $answers[1] -or -not(Test-GuardPublicIPv4 $ip)){throw 'DNS disagreement or unsupported/non-public answer; no pin update'}
+  $dnsOK=$true;$endpointOK=$true
+ }catch{$issues.Add('DNS_UNVERIFIED: '+$_.Exception.Message+'. Keep current pin; check physical DNS HTTPS and retry Fix.cmd.');$ip=[string]$config.UpstreamAddress}}
+ $result['EndpointMode']=$config.EndpointMode;$result['EndpointVerified']=$endpointOK
+ $result['DNSVerified']=$dnsOK;$result['ResolvedAddress']=$ip;$result['PreviousPin']=$previousPin
  if($Mode -ne 'Diagnose'){
-  if(-not $dnsOK -and -not $config.UpstreamAddress){throw 'First install needs two agreeing DNS answers; no old pin exists'}
+  if(-not $endpointOK -and -not $config.UpstreamAddress){throw 'First install needs verified endpoint: agreeing DNS answers or explicit public PinnedIPv4'}
   if($config.UpstreamAddress){& "$root\Sync-Guard.ps1" -Mode Sync | Out-File "$out\sync-before.log"}
   Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True
   $routes=@(Get-NetRoute -DestinationPrefix ($ip+'/32') -ErrorAction SilentlyContinue)
@@ -111,7 +131,7 @@ try {
   Register-GuardTask;$resumeTask=$false
  }
  if($dnsOK -and $ip -ne $config.UpstreamAddress){$issues.Add('PIN_CHANGED: DNS='+$ip+'; configured='+$config.UpstreamAddress+'. Run Fix.cmd to update route and both restriction layers.')}
- try{& "$root\Sync-Guard.ps1" -Mode Verify | Out-File "$out\verify.log"}catch{$issues.Add('GUARD: '+$_.Exception.Message+'. Run Fix.cmd.')}
+ try{Verify-GuardBounded}catch{$issues.Add('GUARD: '+$_.Exception.Message+'. Inspect verify logs before another Fix.')}
  $expectedRules=@(
   $(if(@($config.BlockedInterfaces).Count){@{Name='Happ-Xray-Block-FlClashX';Address=@('Any');Protocol='Any';Port=@('Any');Interface=@($config.BlockedInterfaces)}}),
   @{Name='Happ-Xray-Lock-OtherIPv4';Address=@(Outside-IPv4 $config.UpstreamAddress);Protocol='Any';Port=@('Any');Interface=@('Any')},
@@ -143,6 +163,7 @@ try {
   else{try{
    $connections=@(Get-NetTCPConnection -OwningProcess $owner.ProcessId -State Established -ErrorAction SilentlyContinue | Where-Object {$_.RemoteAddress -notin @('127.0.0.1','::1')})
    if(@($connections | Where-Object {$_.RemoteAddress -ne $config.UpstreamAddress -or $_.RemotePort -ne $config.UpstreamPort -or $_.LocalAddress -notin $local}).Count){throw 'Happ core has a connection outside the pinned physical path. Reconnect the configured server in Happ.'}
+   Write-Host 'Checking protected SOCKS/HTTP proxy and blocked bypass paths...'
    $probeResult=& "$PSScriptRoot\Test-Protected.ps1" -Root $root -OutputDirectory $out -Upstream $config.UpstreamAddress -ProxyPort $port -Country $config.ExpectedCountry -UpstreamPort $config.UpstreamPort;$result['Experiment']=$probeResult
    if(-not $probeResult.OverallOK){$issues.Add('NETWORK_TEST_FAILED: see experiment.json. Reconnect the SAME server in Happ and rerun Diagnose.cmd. If it persists, check the provider/server; do not relax firewall.')}
   }catch{$issues.Add('PROBE: '+$_.Exception.Message+'. See run.log and experiment.json.')}}

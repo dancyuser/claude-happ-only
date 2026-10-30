@@ -1,6 +1,6 @@
 ﻿#requires -Version 5.1
 # Downloads the public release. No elevation/install occurs with -DownloadOnly.
-[CmdletBinding()]param([switch]$DownloadOnly,[string]$CacheDirectory=(Join-Path $env:LOCALAPPDATA 'ClaudeHappOnly\Downloads\Releases'))
+[CmdletBinding()]param([switch]$DownloadOnly,[ValidateSet('Auto','Install','Update')][string]$Action='Auto',[string]$ConfigurationFile,[string]$CacheDirectory=(Join-Path $env:LOCALAPPDATA 'ClaudeHappOnly\Downloads\Releases'))
 $ErrorActionPreference='Stop'
 try{
  [Net.ServicePointManager]::SecurityProtocol=[Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
@@ -22,6 +22,18 @@ try{
  @{Version=$release.tag_name;SHA256=$expected;DigestMatched=$true;Extracted=$extract;SetupExecuted=$false;CheckedUTC=[DateTime]::UtcNow.ToString('o')} | ConvertTo-Json | Set-Content (Join-Path $CacheDirectory 'verified-release.json') -Encoding UTF8
  Write-Host ('VERIFIED: '+$release.tag_name+'; '+$setup)
  if($DownloadOnly){Write-Host 'Download only; setup NOT executed.';exit 0}
- & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File $setup
- exit $LASTEXITCODE
+ $installed=Test-Path -LiteralPath (Join-Path $env:ProgramData 'ClaudeHappOnly\config.json')
+ if($Action -eq 'Auto'){$Action=if($installed -and -not $ConfigurationFile){'Update'}else{'Install'}}
+ if($Action -eq 'Update'){
+  if(-not $installed -or $ConfigurationFile){throw 'Update requires an installed guard and no ConfigurationFile. Use Install for a new setup or Reconfigure.ps1 for parameter changes.'}
+  $updater=Join-Path $extract 'claude-happ-only\Update-CodeSupport.ps1'
+  if(-not(Test-Path -LiteralPath $updater)){throw 'Updater missing in release'}
+  Write-Host 'Existing guard: preserving this computer settings, then CheckOnly. Claude will not start.'
+  & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File $updater
+ }elseif($ConfigurationFile){
+  & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File $setup -ConfigurationFile ([IO.Path]::GetFullPath($ConfigurationFile))
+ }else{& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File $setup}
+ $exitCode=$LASTEXITCODE
+ @{Version=$release.tag_name;SHA256=$expected;DigestMatched=$true;Extracted=$extract;Action=$Action;SetupExecuted=($Action -eq 'Install');UpdaterExecuted=($Action -eq 'Update');ExitCode=$exitCode;CheckedUTC=[DateTime]::UtcNow.ToString('o')} | ConvertTo-Json | Set-Content (Join-Path $CacheDirectory 'verified-release.json') -Encoding UTF8
+ exit $exitCode
 }catch{Write-Host ('INSTALLER NOT RUN: '+$_.Exception.Message) -ForegroundColor Red;exit 1}
