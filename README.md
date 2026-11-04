@@ -83,3 +83,12 @@ Sync добавляет ограничения уже обнаруженных E
 IP сервера Happ и внешний IP выхода — разные параметры. Комплект проверяет одинаковый текущий выход у нескольких HTTPS-сервисов и нужную страну; неизменный IP провайдера навсегда он не обеспечивает.
 
 В публичном комплекте нет личных конфигураций, SID, подписок, ключей, резервных копий или журналов. SHA256 подтверждает совпадение файлов, но не заменяет цифровую подпись. Browser Tamer загружается только с официального upstream; его настройки, браузер по умолчанию и Chrome proxy extensions автоматически не меняются.
+
+
+## SnowVPN / FlClashX: automatic active TUN selection (unreleased fix)
+
+When `BlockedInterfaces` contains `FlClashX` or `SnowVPN Tun V2`, the guard resolves the interface on every Diagnose/Fix. It requires exactly one **Up** adapter with a matching name (`FlClashX` or `SnowVPN Tun Vn`) and driver description `Meta Tunnel`. The old config value need not be edited when switching VPN clients. Other explicitly listed blocked adapters remain covered.
+
+The existing rule name `Happ-Xray-Block-FlClashX` is intentionally retained for backup/restore compatibility, even when its interface filter now matches `SnowVPN Tun V2`. Fix installs and verifies a temporary overlapping block before replacing the old rule. If replacement fails, the staging BLOCK remains active and Preflight fails; inspect the reported `Happ-Xray-Block-TUN-Stage-*` rule before further changes.
+
+**No continuous failover monitoring**: close Claude before switching between SnowVPN and FlClashX and launch it again through the checked shortcut. Do not switch VPNs while Claude is running. Existing pinned upstream routing and other WFP policies remain unchanged. The patch includes synthetic tests but does not claim a live Windows Firewall runtime pass.

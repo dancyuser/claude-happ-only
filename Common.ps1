@@ -116,3 +116,27 @@ function Start-CoverageObserver {
  $root=Get-GuardRoot
  Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$root+'\Watch-AppIdCoverage.ps1"') -WindowStyle Hidden
 }
+
+# Resolve a known VPN's actual interface alias. No firewall or network mutation here.
+function Resolve-GuardBlockedInterfaces($Configuration,$Adapters=$null) {
+ $configured=@($Configuration.BlockedInterfaces | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+ if(-not $configured.Count){return [pscustomobject]@{Aliases=@();SelectedTun='';Automatic=$false}}
+ $pattern='^(?:FlClashX|SnowVPN Tun(?: V[0-9]+)?)$'
+ $automatic=(@($configured | Where-Object { [string]$_ -match $pattern }).Count -gt 0)
+ if($null -eq $Adapters){$Adapters=@(Get-NetAdapter -IncludeHidden -ErrorAction Stop)}
+ $all=@($Adapters);$aliases=@();$selected=''
+ if($automatic){
+  $unknown=@($all | Where-Object {$_.Status -eq 'Up' -and $_.InterfaceDescription -eq 'Meta Tunnel' -and $_.Name -notmatch $pattern})
+  if($unknown.Count){throw ('Unrecognized active Meta Tunnel: '+(($unknown | ForEach-Object {$_.Name}) -join ', ')+'. No firewall interface was guessed.')}
+  $active=@($all | Where-Object {$_.Status -eq 'Up' -and $_.Name -match $pattern -and $_.InterfaceDescription -eq 'Meta Tunnel'})
+  if($active.Count -ne 1){throw ('Exactly one active FlClashX/SnowVPN Meta Tunnel is required; found '+$active.Count+'. Switch VPN before preflight.')}
+  $selected=[string]$active[0].Name;$aliases+=@($selected)
+ }
+ foreach($item in $configured){
+  $name=[string]$item
+  if($automatic -and $name -match $pattern){continue}
+  if(@($all | Where-Object {$_.Name -eq $name}).Count -ne 1){throw ('Configured blocked interface missing or ambiguous: '+$name)}
+  $aliases+=@($name)
+ }
+ return [pscustomobject]@{Aliases=@($aliases | Sort-Object -Unique);SelectedTun=$selected;Automatic=$automatic}
+}

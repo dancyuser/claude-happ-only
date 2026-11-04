@@ -1,5 +1,12 @@
 # Изменения
 
+## Unreleased - Auto SnowVPN/FlClashX TUN
+
+- Auto-select an active Meta Tunnel named SnowVPN Tun Vn or FlClashX when existing BlockedInterfaces uses either family.
+- Stage and verify an Xray BLOCK rule before changing the legacy named firewall rule; keep staging protection on failure.
+- Add synthetic fail-closed tunnel selection tests, retain existing config and backup/restore format.
+
+
 ## v3.4.0
 
 - Добавлена установка пользовательского ConfigCI из подписанного штатного компонента WinSxS, без загрузки DLL с посторонних сайтов и без применения политик.

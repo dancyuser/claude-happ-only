@@ -36,7 +36,7 @@ try{
   Write-Host '';Write-Host '2/3. Физическое подключение'
   foreach($net in $networks){Write-Host ('  '+$net.Name+' | IPv4 '+$net.IPv4+' | шлюз '+$net.Gateway)}
   $inputConfig['PhysicalInterface']=Ask 'Имя физического адаптера (как в списке; не VPN/TUN)' $nicDefault
-  $blockedDefault='';try{if(Get-NetAdapter -Name FlClashX -ErrorAction SilentlyContinue){$blockedDefault='FlClashX'}}catch{}
+  $blockedDefault='';try{$tun=@(Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue | Where-Object {$_.Status -eq 'Up' -and $_.InterfaceDescription -eq 'Meta Tunnel' -and $_.Name -match '^(?:FlClashX|SnowVPN Tun(?: V[0-9]+)?)$'});if($tun.Count -eq 1){$blockedDefault=$tun[0].Name}}catch{}
   $blocked=Ask 'Запретить Happ эти виртуальные адаптеры (имена через запятую; минус = нет)' $blockedDefault
   $inputConfig['BlockedInterfaces']=if($blocked -and $blocked -ne '-'){@($blocked.Split(',') | ForEach-Object {$_.Trim()} | Where-Object {$_})}else{@()}
   Write-Host '';Write-Host '3/3. Приложения'

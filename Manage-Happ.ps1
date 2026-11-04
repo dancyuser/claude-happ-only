@@ -49,6 +49,39 @@ function Firewall-Rule($name,$addresses,$protocol='Any',$ports=@('Any'),$interfa
  if($r){$r | Remove-NetFirewallRule}
  New-NetFirewallRule -Name $name -DisplayName $name -Group 'Claude Happ Only' -Program $xray -Direction Outbound -Action Block -Enabled True -Profile Any -RemoteAddress $addresses -Protocol $protocol -RemotePort $ports -InterfaceAlias $interfaces | Out-Null
 }
+function Assert-XrayTunnelRule([string]$Name,[string[]]$Aliases) {
+ foreach($store in @('PersistentStore','ActiveStore')){
+  $rules=@(Get-NetFirewallRule -Name $Name -PolicyStore $store -ErrorAction SilentlyContinue)
+  if($rules.Count -ne 1){throw ('Tunnel block absent or ambiguous in '+$store+': '+$Name)}
+  $rule=$rules[0]
+  $app=$rule | Get-NetFirewallApplicationFilter
+  $iface=$rule | Get-NetFirewallInterfaceFilter
+  $address=$rule | Get-NetFirewallAddressFilter
+  $portFilter=$rule | Get-NetFirewallPortFilter
+  if([string]$rule.Enabled -ne 'True' -or [string]$rule.Action -ne 'Block' -or [string]$rule.Direction -ne 'Outbound' -or [string]$rule.Profile -ne 'Any' -or [string]$rule.Group -ne 'Claude Happ Only' -or [string]$app.Program -ine $xray -or $rule.PolicyAppId){throw ('Unsafe tunnel rule scope: '+$Name)}
+  if((@($iface.InterfaceAlias | Sort-Object)-join ',') -ne (@($Aliases | Sort-Object)-join ',') -or (@($address.RemoteAddress)-join ',') -ne 'Any' -or [string]$portFilter.Protocol -ne 'Any' -or (@($portFilter.RemotePort)-join ',') -ne 'Any'){throw ('Tunnel rule filters mismatch: '+$Name)}
+ }
+}
+function Ensure-XrayTunnelRule([string[]]$Aliases) {
+ # Preserve historical rule name for existing backups and Preflight expectations.
+ $name='Happ-Xray-Block-FlClashX'
+ $existing=@(Get-NetFirewallRule -Name $name -PolicyStore PersistentStore -ErrorAction SilentlyContinue)
+ if($existing.Count -gt 1){throw 'Multiple tunnel block rules; manual review required'}
+ if($existing.Count -eq 1){
+  try{Assert-XrayTunnelRule $name $Aliases;Write-Host ('TUN BLOCK PASS: '+($Aliases -join ', '));return}catch{}
+ }
+ # Establish and validate the new block before removing the old one.
+ $stage='Happ-Xray-Block-TUN-Stage-'+[guid]::NewGuid().ToString('N')
+ New-NetFirewallRule -Name $stage -DisplayName $stage -Group 'Claude Happ Only' -Program $xray -Direction Outbound -Action Block -Enabled True -Profile Any -RemoteAddress Any -Protocol Any -InterfaceAlias $Aliases -ErrorAction Stop | Out-Null
+ Assert-XrayTunnelRule $stage $Aliases
+ try{
+  if($existing.Count){$existing[0] | Remove-NetFirewallRule -ErrorAction Stop}
+  New-NetFirewallRule -Name $name -DisplayName $name -Group 'Claude Happ Only' -Program $xray -Direction Outbound -Action Block -Enabled True -Profile Any -RemoteAddress Any -Protocol Any -InterfaceAlias $Aliases -ErrorAction Stop | Out-Null
+  Assert-XrayTunnelRule $name $Aliases
+ }catch{throw ('Tunnel replacement incomplete; verified temporary BLOCK retained: '+$stage+'. '+$_.Exception.Message)}
+ Get-NetFirewallRule -Name $stage -PolicyStore PersistentStore -ErrorAction Stop | Remove-NetFirewallRule -ErrorAction Stop
+ Write-Host ('TUN BLOCK PASS: '+($Aliases -join ', '))
+}
 function Outside-IPv4([string]$ip) {
  $n=[HappOnlyWfp]::IPv4($ip)
  function Format-IP([uint64]$v){'{0}.{1}.{2}.{3}' -f (($v -shr 24)-band 255),(($v -shr 16)-band 255),(($v -shr 8)-band 255),($v-band 255)}
@@ -87,6 +120,9 @@ try {
   }
  }
  if(-not(Test-Path "$root\config.json")){throw 'Guard not installed. Run Install.cmd first.'}
+ $tunnel=Resolve-GuardBlockedInterfaces $config
+ $blockedInterfaces=@($tunnel.Aliases)
+ if($tunnel.Automatic){Write-Host ('TUN SELECTED: '+$tunnel.SelectedTun)}
  $nic=Get-NetAdapter -Name $config.PhysicalInterface
  if($nic.Status -ne 'Up' -or -not $nic.HardwareInterface){throw 'Configured physical network adapter is not Up. Restore its connection; virtual adapters are not selected.'}
  $network=Get-NetIPConfiguration -InterfaceIndex $nic.ifIndex
@@ -119,7 +155,7 @@ try {
   if(-not $routes.Count){Add-RouteIntent $backup ($ip+'/32') $nic.ifIndex $gateway[0] 'ActiveStore';if(-not @(Get-NetRoute -DestinationPrefix ($ip+'/32') -PolicyStore PersistentStore -ErrorAction SilentlyContinue).Count){Add-RouteIntent $backup ($ip+'/32') $nic.ifIndex $gateway[0] 'PersistentStore'};New-NetRoute -DestinationPrefix ($ip+'/32') -InterfaceIndex $nic.ifIndex -NextHop $gateway[0] -RouteMetric 1 | Out-Null}
   $persistent=@(Get-NetRoute -DestinationPrefix ($ip+'/32') -PolicyStore PersistentStore -ErrorAction SilentlyContinue)
   if(-not $persistent.Count){Add-RouteIntent $backup ($ip+'/32') $nic.ifIndex $gateway[0] 'PersistentStore';New-NetRoute -DestinationPrefix ($ip+'/32') -InterfaceIndex $nic.ifIndex -NextHop $gateway[0] -RouteMetric 1 -PolicyStore PersistentStore | Out-Null}
-  if(@($config.BlockedInterfaces).Count){Firewall-Rule 'Happ-Xray-Block-FlClashX' @('Any') 'Any' @('Any') @($config.BlockedInterfaces)}
+  if($blockedInterfaces.Count){Ensure-XrayTunnelRule $blockedInterfaces}
   Firewall-Rule 'Happ-Xray-Lock-OtherIPv4' (Outside-IPv4 $ip)
   Firewall-Rule 'Happ-Xray-Lock-OtherTCPPorts' @($ip) 'TCP' @(Get-OtherPorts $config.UpstreamPort)
   Firewall-Rule 'Happ-Xray-Lock-EndpointUDP' @($ip) 'UDP'
@@ -134,7 +170,7 @@ try {
  if($dnsOK -and $ip -ne $config.UpstreamAddress){$issues.Add('PIN_CHANGED: DNS='+$ip+'; configured='+$config.UpstreamAddress+'. Run Fix.cmd to update route and both restriction layers.')}
  try{Verify-GuardBounded}catch{$issues.Add('GUARD: '+$_.Exception.Message+'. Inspect verify logs before another Fix.')}
  $expectedRules=@(
-  $(if(@($config.BlockedInterfaces).Count){@{Name='Happ-Xray-Block-FlClashX';Address=@('Any');Protocol='Any';Port=@('Any');Interface=@($config.BlockedInterfaces)}}),
+  $(if($blockedInterfaces.Count){@{Name='Happ-Xray-Block-FlClashX';Address=@('Any');Protocol='Any';Port=@('Any');Interface=@($blockedInterfaces)}}),
   @{Name='Happ-Xray-Lock-OtherIPv4';Address=@(Outside-IPv4 $config.UpstreamAddress);Protocol='Any';Port=@('Any');Interface=@('Any')},
   @{Name='Happ-Xray-Lock-OtherTCPPorts';Address=@($config.UpstreamAddress);Protocol='TCP';Port=@(Get-OtherPorts $config.UpstreamPort);Interface=@('Any')},
   @{Name='Happ-Xray-Lock-EndpointUDP';Address=@($config.UpstreamAddress);Protocol='UDP';Port=@('Any');Interface=@('Any')},
