@@ -36,7 +36,40 @@ try{
   Write-Host '';Write-Host '2/3. Физическое подключение'
   foreach($net in $networks){Write-Host ('  '+$net.Name+' | IPv4 '+$net.IPv4+' | шлюз '+$net.Gateway)}
   $inputConfig['PhysicalInterface']=Ask 'Имя физического адаптера (как в списке; не VPN/TUN)' $nicDefault
-  $blockedDefault='';try{if(Get-NetAdapter -Name FlClashX -ErrorAction SilentlyContinue){$blockedDefault='FlClashX'}}catch{}
+  $blockedDefault='';try{$tun=@(Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue | Where-Object {$_.Status -eq 'Up' -and $_.InterfaceDescription -eq 'Meta Tunnel' -and $_.Name -match '^(?:FlClashX|SnowVPN Tun(?: V[0-9]+)?)
+  $blocked=Ask 'Запретить Happ эти виртуальные адаптеры (имена через запятую; минус = нет)' $blockedDefault
+  $inputConfig['BlockedInterfaces']=if($blocked -and $blocked -ne '-'){@($blocked.Split(',') | ForEach-Object {$_.Trim()} | Where-Object {$_})}else{@()}
+  Write-Host '';Write-Host '3/3. Приложения'
+  $inputConfig['XrayPath']=Ask 'Путь к внутреннему xray.exe Happ' $xrayDefault
+  $inputConfig['PackageFamily']=Ask 'Семейство MSIX Claude (для обычной установки оставьте найденное)' $family
+  if((Ask 'Claude установлен отдельно от MSIX? y/N' 'N') -match '^[yY]'){
+   $inputConfig['ClaudeRoot']=Ask 'Каталог отдельной установки Claude' ''
+   $inputConfig['ClaudeExe']=Ask 'Полный путь к claude.exe' (Join-Path $inputConfig.ClaudeRoot 'claude.exe')
+  }
+ }
+ $c=Complete-SetupConfiguration $inputConfig $defaults
+ if($AppIdMode){$c | Add-Member NoteProperty AppIdMode $AppIdMode -Force}
+ $temp=Join-Path $env:TEMP ('ClaudeHapp-Setup-'+[guid]::NewGuid().ToString('N')+'.json')
+ $c | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $temp -Encoding UTF8
+ $c=Read-GuardConfig $temp
+ if($Preview){$c | ConvertTo-Json -Depth 20;$code=0}
+ else{
+  Assert-NoClaudeClient
+  Write-Host ('Установка: '+$c.EndpointMode+'; '+$c.PhysicalInterface+'; прокси 127.0.0.1:'+$c.ProxyPort+'; AppID='+$c.AppIdMode)
+  $installArgs=@('-NoProfile','-ExecutionPolicy','Bypass','-File',"$PSScriptRoot\Install-Automated.ps1",'-ConfigurationFile',$temp,'-Mode','Install','-AppIdMode',$c.AppIdMode)
+  if($NoWatch){$installArgs+='-NoWatch'}
+  & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" @installArgs
+  $code=$LASTEXITCODE
+  if($code -ne 0){throw 'Автоматическая установка не завершена; смотрите указанный отчет транзакции.'}
+  $installBT=$InstallBrowserTamer.IsPresent
+  if(-not $ConfigurationFile -and -not $installBT){$installBT=(Ask 'Установить необязательный Browser Tamer для ссылок в отдельный профиль? y/N' 'N') -match '^[yY]'}
+  if($installBT){& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot\Install-BrowserTamer.ps1";if($LASTEXITCODE -ne 0){throw 'Защита установлена, но установка Browser Tamer не завершена.'}}
+  Write-Host 'SETUP PASS. Защита и CheckOnly проверены. Claude не запускался.';$code=0
+ }
+}catch{$code=1;Write-Host ('SETUP FAILED: '+$_.Exception.Message) -ForegroundColor Red}
+finally{if($temp -and (Test-Path -LiteralPath $temp)){try{Remove-Item -LiteralPath $temp -Force}catch{Write-Warning ('Не удалось удалить временную конфигурацию: '+$temp)}}}
+exit $code
+});if($tun.Count -eq 1){$blockedDefault=$tun[0].Name}}catch{}
   $blocked=Ask 'Запретить Happ эти виртуальные адаптеры (имена через запятую; минус = нет)' $blockedDefault
   $inputConfig['BlockedInterfaces']=if($blocked -and $blocked -ne '-'){@($blocked.Split(',') | ForEach-Object {$_.Trim()} | Where-Object {$_})}else{@()}
   Write-Host '';Write-Host '3/3. Приложения'
