@@ -1,4 +1,4 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 # Synthetic fixtures only; no UAC, adapters changed, firewall writes or Claude launch.
 $ErrorActionPreference='Stop'
 . "$PSScriptRoot\..\Common.ps1"

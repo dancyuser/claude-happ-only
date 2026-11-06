@@ -5,9 +5,11 @@
  [ValidateRange(1,65535)][int]$ProxyPort=10808,
  [ValidatePattern('^[A-Z]{2}$')][string]$ExpectedCountry='DE',
  [string]$SettingsPath,
+ [switch]$SettingsOnly,
  [ValidatePattern('^[a-f0-9]{32}$')][string]$BackupId
 )
 $ErrorActionPreference='Stop';. "$PSScriptRoot\CodeProxy.Common.ps1"
+if($SettingsOnly -and $Mode -ne 'Diagnose'){throw 'SettingsOnly is supported only with Diagnose; Apply still requires a successful proxy/country test'}
 if([Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){throw 'Use ordinary PowerShell, not Administrator, for user settings'}
 if(-not $SettingsPath){
  $configHome=if($env:CLAUDE_CONFIG_DIR){$env:CLAUDE_CONFIG_DIR}else{Join-Path ([Environment]::GetFolderPath('UserProfile')) '.claude'}
@@ -30,10 +32,11 @@ if($Mode -eq 'Restore'){
  if($meta.Existed){Copy-Item -LiteralPath "$backup\settings.before" -Destination $SettingsPath -Force}else{Remove-Item -LiteralPath $SettingsPath}
  return [pscustomobject]@{Mode=$Mode;Restored=$true;SettingsPath=$SettingsPath;ClaudeLaunched=$false}
 }
-$transport=Test-CodeProxyTransport $ProxyPort $ExpectedCountry
 $settingsOK=Test-CodeProxySettings $text $ProxyPort
+if($SettingsOnly){return [pscustomobject]@{Mode=$Mode;SettingsPath=$SettingsPath;SettingsOK=$settingsOK;TransportChecked=$false;Transport=$null;ClaudeLaunched=$false;Scope='Settings only; no transport test and no launch approval'}}
+$transport=Test-CodeProxyTransport $ProxyPort $ExpectedCountry
 if($Mode -eq 'Diagnose'){
- return [pscustomobject]@{Mode=$Mode;OverallOK=[bool]($transport.OK -and $settingsOK);SettingsPath=$SettingsPath;SettingsOK=$settingsOK;Transport=$transport;ClaudeLaunched=$false;Scope='User settings + HTTP proxy only; WFP and project/managed overrides require separate checks'}
+ return [pscustomobject]@{Mode=$Mode;OverallOK=[bool]($transport.OK -and $settingsOK);SettingsPath=$SettingsPath;SettingsOK=$settingsOK;TransportChecked=$true;Transport=$transport;ClaudeLaunched=$false;Scope='User settings + HTTP proxy only; WFP and project/managed overrides require separate checks'}
 }
 if(-not $transport.OK){throw ('HTTP proxy/country test failed; settings unchanged. '+($transport | ConvertTo-Json -Compress))}
 if(@(Get-Process -Name claude -ErrorAction SilentlyContinue).Count){throw 'Close Claude yourself before applying settings. No process was stopped.'}

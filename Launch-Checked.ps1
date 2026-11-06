@@ -10,12 +10,20 @@ try{
  $root=Get-GuardRoot;$c=Read-GuardConfig "$root\config.json";$userSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
  if($userSid -ne $c.LaunchUserSid){throw 'Shortcut belongs to a different configured user'}
  if(@(Get-Process -Name claude -ErrorAction SilentlyContinue).Count){throw 'Close Claude yourself before checked launch or CheckOnly'}
- $codeProxy=& "$root\Configure-CodeProxy.ps1" -Mode Diagnose -ProxyPort $c.ProxyPort -ExpectedCountry $c.ExpectedCountry
- if(-not $codeProxy.OverallOK){throw 'Code HTTP proxy/settings check failed. Run Configure-CodeProxy.ps1 -Mode Apply in ordinary PowerShell after closing Claude. No launch approval issued.'}
+ # Transport belongs to protected Preflight: it can diagnose/repair changed TUN
+ # rules before exercising SOCKS and HTTP CONNECT. An early curl probe prevented
+ # that repair and incorrectly blamed valid Code settings when Happ was offline.
+ $codeProxy=& "$root\Configure-CodeProxy.ps1" -Mode Diagnose -SettingsOnly -ProxyPort $c.ProxyPort -ExpectedCountry $c.ExpectedCountry
+ if(-not $codeProxy.SettingsOK){throw ('Code settings do not match http://127.0.0.1:'+$c.ProxyPort+'. Close Claude, then run: & "'+$root+'\Configure-CodeProxy.ps1" -Mode Apply -ProxyPort '+$c.ProxyPort+' -ExpectedCountry '+$c.ExpectedCountry+'. No launch approval issued.')}
+ Write-Host ('Code settings OK. Happ must be connected on 127.0.0.1:'+$c.ProxyPort+'; SnowVPN/FlClashX does not replace Happ.')
  $id=[Guid]::NewGuid();Write-Host 'Checking tunnel. A UAC request will open for checks/repair only. Claude is not running yet.'
  $exit=Invoke-ElevatedPowerShell ('-NoProfile -ExecutionPolicy Bypass -File "'+$root+'\Preflight.ps1" -RequestId '+$id)
  $path=Join-Path $root ('LaunchTickets\'+$id+'.json')
  if($exit -ne 0 -or -not(Test-Path -LiteralPath $path)){throw ('Preflight failed/cancelled. Claude will NOT start. Ticket: '+$path)}
+ # Re-read user settings after the administrative phase; changes cannot bypass
+ # the proxy configuration requirement. This probe never performs network I/O.
+ $codeProxy=& "$root\Configure-CodeProxy.ps1" -Mode Diagnose -SettingsOnly -ProxyPort $c.ProxyPort -ExpectedCountry $c.ExpectedCountry
+ if(-not $codeProxy.SettingsOK){throw 'Code settings changed during preflight. No launch approval issued.'}
  $t=Read-ValidatedLaunchTicket $id $c
  $state=Get-Content -Raw "$root\state.json" | ConvertFrom-Json
  if(Test-Path "$root\maintenance.txt"){throw 'Restore/maintenance incomplete. Finish Restore or Fix successfully before launch.'}

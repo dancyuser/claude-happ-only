@@ -87,8 +87,21 @@ IP сервера Happ и внешний IP выхода — разные пар
 
 ## SnowVPN / FlClashX: automatic active TUN selection (unreleased fix)
 
+Happ must remain running and connected in proxy mode. SnowVPN/FlClashX carries other applications' traffic; it does not replace the local Happ proxy. The checked launcher validates Code settings without a preliminary network probe, then delegates SOCKS/HTTP CONNECT, exit-country and bypass-rejection tests to the protected Preflight. This lets Preflight diagnose/repair a changed TUN rule before testing transport. It rechecks Code settings after Preflight and still requires a fresh valid launch ticket.
+
+If the proxy is unavailable, inspect the Preflight report (including `HAPP_LISTENER`) rather than rewriting already-correct Code settings. To separate settings from transport in ordinary PowerShell:
+
+```powershell
+$guard = Join-Path $env:ProgramData 'ClaudeHappOnly'
+$c = Get-Content (Join-Path $guard 'config.json') -Raw | ConvertFrom-Json
+& "$guard\Configure-CodeProxy.ps1" -Mode Diagnose -SettingsOnly -ProxyPort $c.ProxyPort -ExpectedCountry $c.ExpectedCountry
+& "$guard\Configure-CodeProxy.ps1" -Mode Diagnose -ProxyPort $c.ProxyPort -ExpectedCountry $c.ExpectedCountry
+```
+
+`SettingsOnly` performs no network test and issues no transport or launch approval. Apply still requires a successful proxy/country test. A failed transport test with `SettingsOK=true` indicates a proxy/connectivity/country problem; it is not evidence of invalid settings.
+
 When `BlockedInterfaces` contains `FlClashX` or `SnowVPN Tun V2`, the guard resolves the interface on every Diagnose/Fix. It requires exactly one **Up** adapter with a matching name (`FlClashX` or `SnowVPN Tun Vn`) and driver description `Meta Tunnel`. The old config value need not be edited when switching VPN clients. Other explicitly listed blocked adapters remain covered.
 
 The existing rule name `Happ-Xray-Block-FlClashX` is intentionally retained for backup/restore compatibility, even when its interface filter now matches `SnowVPN Tun V2`. Fix installs and verifies a temporary overlapping block before replacing the old rule. If replacement fails, the staging BLOCK remains active and Preflight fails; inspect the reported `Happ-Xray-Block-TUN-Stage-*` rule before further changes.
 
-**No continuous failover monitoring**: close Claude before switching between SnowVPN and FlClashX and launch it again through the checked shortcut. Do not switch VPNs while Claude is running. Existing pinned upstream routing and other WFP policies remain unchanged. The patch includes synthetic tests but does not claim a live Windows Firewall runtime pass.
+**No continuous failover monitoring**: close Claude before switching between SnowVPN and FlClashX and launch it again through the checked shortcut. Do not switch VPNs while Claude is running. Existing pinned upstream routing and other WFP policies remain unchanged. An existing-machine Fix/Preflight with SnowVPN Tun V2 passed on 2026-11-06; see [validation scope](VALIDATION-ru.md). Switching between both clients during a session and clean-machine installation remain untested.

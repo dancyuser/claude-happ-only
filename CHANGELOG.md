@@ -2,6 +2,9 @@
 
 ## Unreleased - Auto SnowVPN/FlClashX TUN
 
+- Fix checked-launch ordering: validate Code settings separately, run protected Preflight with its repair round, then recheck settings before accepting the fresh ticket. An unavailable Happ proxy no longer produces misleading instructions to rewrite valid settings or prevents Preflight from running.
+- Add Diagnose -SettingsOnly without transport/launch approval; Apply retains mandatory HTTP proxy/country checks. Add isolated launcher regression checks for check/repair ordering and rejection of invalid settings.
+
 - Auto-select an active Meta Tunnel named SnowVPN Tun Vn or FlClashX when existing BlockedInterfaces uses either family.
 - Stage and verify an Xray BLOCK rule before changing the legacy named firewall rule; keep staging protection on failure.
 - Add synthetic fail-closed tunnel selection tests, retain existing config and backup/restore format.
