@@ -1,0 +1,19 @@
+{
+  "Schema": 1,
+  "ProfileId": "33333333-3333-3333-3333-333333333333",
+  "Name": "My proxy profile",
+  "Mode": "TunProxy",
+  "Programs": ["C:\\Apps\\Example\\app.exe"],
+  "TransportInterfaceGuid": "44444444-4444-4444-4444-444444444444",
+  "ExpectedCountry": "DE",
+  "AllowIPv6": false,
+  "Proxy": {
+    "Address": "127.0.0.1",
+    "Port": 10808,
+    "Scheme": "http",
+    "Executable": "C:\\Apps\\MyProxy\\core.exe",
+    "ServerAddress": "192.0.2.20",
+    "ServerPort": 443,
+    "ServerProtocol": "TCP"
+  }
+}

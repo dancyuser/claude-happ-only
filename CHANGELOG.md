@@ -1,5 +1,13 @@
 # Изменения
 
+## v3.6.0-rc.1 — универсальные профили
+
+- Отдельный мастер для любых выбранных Windows EXE: TUN + HTTP/SOCKS5-прокси или TUN с собственной постоянной WFP-блокировкой обхода интерфейса.
+- Выбор адаптера по GUID/NET_LUID вместо имени; отсутствующий интерфейс не заменяется по догадке. Порты, IP, транспорт и путь сетевого ядра задаются пользователем.
+- Для строгого TUN предусмотрено ограничение VPN-ядра до одного серверного endpoint; отдельно обозначен InterfaceOnly, который не предотвращает DIRECT внутри VPN.
+- Собственные профили, атомарная смена WFP-фильтров, резервные копии, Restore, Verify/Test и явный пользовательский запуск после свежей проверки. Работающая установка Claude/Happ сохраняется отдельно.
+- Проверены конфигурационные сценарии и реальные TUN InterfaceOnly/HTTP Proxy на диагностических копиях curl, включая блокировку обхода и Restore. Реальное отключение VPN, перезагрузка, чистая Windows и строгий режим с настоящим VPN-ядром пока не испытаны.
+
 ## Unreleased - Auto SnowVPN/FlClashX TUN
 
 - Fix checked-launch ordering: validate Code settings separately, run protected Preflight with its repair round, then recheck settings before accepting the fresh ticket. An unavailable Happ proxy no longer produces misleading instructions to rewrite valid settings or prevents Preflight from running.

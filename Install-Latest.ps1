@@ -32,7 +32,10 @@ try{
   & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File $updater
  }elseif($ConfigurationFile){
   & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File $setup -ConfigurationFile ([IO.Path]::GetFullPath($ConfigurationFile))
- }else{& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File $setup}
+ }else{
+  $selector=Join-Path $extract 'claude-happ-only\Select-Setup.ps1'
+  if(Test-Path -LiteralPath $selector){& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File $selector}else{& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File $setup}
+ }
  $exitCode=$LASTEXITCODE
  @{Version=$release.tag_name;SHA256=$expected;DigestMatched=$true;Extracted=$extract;Action=$Action;SetupExecuted=($Action -eq 'Install');UpdaterExecuted=($Action -eq 'Update');ExitCode=$exitCode;CheckedUTC=[DateTime]::UtcNow.ToString('o')} | ConvertTo-Json | Set-Content (Join-Path $CacheDirectory 'verified-release.json') -Encoding UTF8
  exit $exitCode
