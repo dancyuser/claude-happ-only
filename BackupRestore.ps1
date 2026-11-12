@@ -63,6 +63,7 @@ function New-GuardBackup($Candidate,[string]$TaskXmlBefore,[bool]$TaskExistsBefo
  try{Save-JSON @($native.ExportOwned()) "$dir\wfp-owned.json"}finally{$native.Dispose()}
  $paths=@($Candidate.ShortcutPath)
  if(Test-Path "$root\config.json"){$previous=Get-Content -Raw "$root\config.json" | ConvertFrom-Json;$paths+=@($previous.ShortcutPath)}
+ foreach($desktopShortcut in @($paths)){if($desktopShortcut){$paths+=@(Join-Path (Split-Path $desktopShortcut -Parent) 'Claude CLI - Happ Only.lnk')}}
  $index=0;foreach($path in @($paths | Where-Object {$_} | Sort-Object -Unique)){
   $exists=Test-Path -LiteralPath $path -PathType Leaf;$file='shortcut-'+$index+'.lnk'
   if($exists){Copy-Item -LiteralPath $path -Destination (Join-Path $dir $file)}

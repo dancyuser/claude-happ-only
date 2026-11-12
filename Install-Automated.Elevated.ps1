@@ -4,7 +4,7 @@ param([Parameter(Mandatory)][guid]$RequestId,[Parameter(Mandatory)][string]$Conf
 $ErrorActionPreference='Stop'
 . "$PSScriptRoot\Common.ps1";. "$PSScriptRoot\BackupRestore.ps1";. "$PSScriptRoot\CodeProxy.Common.ps1"
 . "$PSScriptRoot\AppId.Runtime.ps1";. "$PSScriptRoot\AppId.Deployment.ps1";. "$PSScriptRoot\AppId.Common.ps1"
-$dir=$null;$createdDir=$false;$code=1;$deployment=$null;$mutex=$null;$locked=$false;$context=[pscustomobject]@{GuardReport='';OldAppIdExists=$false;StateWritten=$false}
+$dir=$null;$createdDir=$false;$code=1;$deployment=$null;$mutex=$null;$locked=$false;$context=[pscustomobject]@{GuardReport='';OldAppIdExists=$false;StateWritten=$false;CliRequestId=''}
 try{
  if(-not [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){throw 'Administrator worker required'}
  if((Get-FileHash -LiteralPath $ConfigurationFile).Hash -ne $ConfigSHA256){throw 'Configuration changed during elevation'}
@@ -63,8 +63,14 @@ try{
    elseif(Test-Path "$root\AppId-state.json"){Remove-Item -LiteralPath "$root\AppId-state.json"}
   }}
  }
- $ops.Preflight={Write-Host 'Final preflight, no new UAC and no Claude launch...';Invoke-PreflightWorker $RequestId}
+ $ops.Preflight={
+  if($c.CliExecutable -and (Test-Path -LiteralPath $c.CliExecutable -PathType Leaf)){
+   $context.CliRequestId=[guid]::NewGuid().ToString();Write-Host 'CLI preflight, checks only; Claude will not start...';Invoke-PreflightWorker ([guid]$context.CliRequestId) -Target Cli
+  }
+  Write-Host 'Final Desktop preflight, no new UAC and no Claude launch...';Invoke-PreflightWorker $RequestId
+ }
  $deployment=Invoke-AppIdDeployment $plan $ops
+ if($context.CliRequestId){$deployment|Add-Member NoteProperty CliRequestId $context.CliRequestId}
  if(Test-Path "$dir\guard-retained.txt"){$deployment | Add-Member NoteProperty GuardDisposition 'Initial restrictions retained; manual review required';$deployment.Rollback='NeedsReview: initial guard retained'}
  if($deployment.Status -eq 'OK'){$code=0}
  elseif($deployment.Status -eq 'PendingActivation'){Write-Host 'APPID PENDING ACTIVATION. No launch approval. Reboot manually if Windows requires it, then rerun setup.' -ForegroundColor Yellow;$code=3}

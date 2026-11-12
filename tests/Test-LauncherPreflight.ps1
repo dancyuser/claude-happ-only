@@ -6,10 +6,11 @@ New-Item -ItemType Directory -Path $fixture | Out-Null
 $utf8=[Text.UTF8Encoding]::new($true)
 $common=@'
 function Get-GuardRoot { return $PSScriptRoot }
-function Read-GuardConfig { return [pscustomobject]@{LaunchUserSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;ProxyPort=10808;ExpectedCountry='DE'} }
+function Read-GuardConfig { return [pscustomobject]@{LaunchUserSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;ProxyPort=10808;ExpectedCountry='DE';CliExecutable=(Join-Path $PSScriptRoot 'claude.exe')} }
 function Get-Process { param($Name,$ErrorAction); return @() }
 function Invoke-ElevatedPowerShell { param($arguments)
  Add-Content "$PSScriptRoot\events.txt" 'Preflight'
+ $arguments | Set-Content "$PSScriptRoot\preflight-arguments.txt"
  $id=[regex]::Match($arguments,'-RequestId ([a-f0-9-]+)').Groups[1].Value
  New-Item -ItemType Directory "$PSScriptRoot\LaunchTickets" -Force | Out-Null
  '{}' | Set-Content "$PSScriptRoot\LaunchTickets\$id.json"
@@ -33,10 +34,14 @@ return [pscustomobject]@{SettingsOK=(-not $bad);TransportChecked=$false}
 Copy-Item "$source\Launch-Checked.ps1" "$fixture\Launch-Checked.ps1"
 [IO.File]::WriteAllText("$fixture\claude.exe",'inert fixture - not an executable')
 $exe=Join-Path $fixture 'claude.exe'
-@{LaunchExecutable=$exe;Executables=@($exe)} | ConvertTo-Json | Set-Content "$fixture\state.json"
+@{LaunchExecutable=$exe;CliExecutable=$exe;Executables=@($exe)} | ConvertTo-Json | Set-Content "$fixture\state.json"
 $out=& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$fixture\Launch-Checked.ps1" -CheckOnly -NoPause
 if($LASTEXITCODE -ne 0 -or ($out -join '') -notmatch 'CHECK ONLY PASS'){throw ('CheckOnly failed: '+($out -join ' '))}
 if(((Get-Content "$fixture\events.txt") -join ',') -ne 'Settings,Preflight,Settings,Ticket'){throw 'Wrong check/repair ordering'}
+Clear-Content "$fixture\events.txt"
+$out=& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$fixture\Launch-Checked.ps1" -Target Cli -CheckOnly -NoPause
+if($LASTEXITCODE -ne 0 -or ($out -join '') -notmatch 'CHECK ONLY PASS' -or (Get-Content "$fixture\preflight-arguments.txt" -Raw) -notmatch '-Target Cli'){throw 'CLI CheckOnly did not request CLI-specific preflight'}
+if(((Get-Content "$fixture\events.txt") -join ',') -ne 'Settings,Preflight,Settings,Ticket'){throw 'CLI skipped required checks'}
 'bad' | Set-Content "$fixture\bad-settings.txt"
 Clear-Content "$fixture\events.txt"
 $out=& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "$fixture\Launch-Checked.ps1" -CheckOnly -NoPause

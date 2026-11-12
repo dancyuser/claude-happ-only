@@ -31,14 +31,23 @@ try{
   $route=@(Get-NetRoute -DestinationPrefix ($endpoint+'/32') -PolicyStore ActiveStore)
   if($route.Count -ne 1 -or $route[0].InterfaceAlias -ne $config.PhysicalInterface -or $route[0].NextHop -ne $config.Gateway){throw 'Pinned endpoint route mismatch'}
   if($old.LaunchExecutable -ne $inventory.Executable){throw 'Package changed since last synchronization'}
+  if([string]$old.CliExecutable -ne [string]$inventory.CliExecutable){throw 'CLI inventory changed since last synchronization'}
   'STATIC VERIFY PASS';return
  }
- $state=[ordered]@{Schema=3;Updated=(Get-Date).ToString('o');PackageFamily=$config.PackageFamily;Packages=$inventory.Packages;Executables=@($inventory.Files.FullName);LaunchExecutable=$inventory.Executable;Proxy=('127.0.0.1:'+$port+'/TCP');Upstream=($endpoint+':'+$config.UpstreamPort+'/TCP');Keys=$keys;ClaudeLaunched=$false}
+ $state=[ordered]@{Schema=3;Updated=(Get-Date).ToString('o');PackageFamily=$config.PackageFamily;Packages=$inventory.Packages;Executables=@($inventory.Files.FullName);LaunchExecutable=$inventory.Executable;CliExecutable=$inventory.CliExecutable;Proxy=('127.0.0.1:'+$port+'/TCP');Upstream=($endpoint+':'+$config.UpstreamPort+'/TCP');Keys=$keys;ClaudeLaunched=$false}
  $state | ConvertTo-Json -Depth 6 | Set-Content "$root\state.json.pending" -Encoding UTF8
  $wfp.Commit();Move-Item "$root\state.json.pending" "$root\state.json" -Force
  $shell=New-Object -ComObject WScript.Shell;$shortcut=$shell.CreateShortcut($config.ShortcutPath)
  $shortcut.TargetPath="$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
  $shortcut.Arguments='-NoProfile -ExecutionPolicy Bypass -File "'+$root+'\Launch-Checked.ps1"'
  $shortcut.WorkingDirectory=$root;$shortcut.Description='Check tunnel, repair once, recheck, then start Claude as signed-in user. Installer never executes this shortcut.';$shortcut.Save()
+ if($inventory.CliExecutable){
+  $cliShortcut=$shell.CreateShortcut((Join-Path (Split-Path $config.ShortcutPath -Parent) 'Claude CLI - Happ Only.lnk'))
+  $cliShortcut.TargetPath="$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+  $cliShortcut.Arguments='-NoProfile -ExecutionPolicy Bypass -File "'+$root+'\Launch-Checked.ps1" -Target Cli'
+  $userProfile=(Get-ItemProperty ('HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\'+$config.LaunchUserSid) -Name ProfileImagePath -ErrorAction Stop).ProfileImagePath
+  $cliShortcut.WorkingDirectory=[Environment]::ExpandEnvironmentVariables($userProfile)
+  $cliShortcut.Description='Check protected tunnel, then start configured standalone Claude CLI. Installer never executes this shortcut.';$cliShortcut.Save()
+ }
  'SYNC PASS: '+$inventory.Files.Count+' EXEs, '+$keys.Count+' persistent filters; checked-launch shortcut saved, NOT executed.'
 }finally{$wfp.Dispose()}

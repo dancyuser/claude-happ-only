@@ -7,6 +7,7 @@ try{
  if([Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){throw 'Start as ordinary target user; this script requests UAC itself'}
  $c=Read-GuardConfig $ConfigurationFile
  if($c.LaunchUserSid -ne [Security.Principal.WindowsIdentity]::GetCurrent().User.Value){throw 'Wrong configured user'}
+ if($c.CliAutoDetect -and -not $c.CliExecutable){$candidate=Join-Path ([Environment]::GetFolderPath('UserProfile')) '.local\bin\claude.exe';if(Test-Path -LiteralPath $candidate -PathType Leaf){$c.CliExecutable=Get-StandaloneCliExecutable $candidate}}
  if(-not $AppIdMode){$AppIdMode=$c.AppIdMode}
  $enabled=($AppIdMode -ne 'Off' -and -not $c.ClaudeRoot)
  if($AppIdMode -eq 'Require' -and $c.ClaudeRoot){throw 'AppID PFN provisioning requires MSIX; standalone needs separately reviewed rules'}

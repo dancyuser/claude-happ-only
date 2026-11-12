@@ -1,5 +1,5 @@
 ﻿#requires -Version 5.1
-param([Parameter(Mandatory)][Guid]$RequestId)
+param([Parameter(Mandatory)][Guid]$RequestId,[ValidateSet('Desktop','Cli')][string]$Target='Desktop')
 $ErrorActionPreference='Stop';. "$PSScriptRoot\Common.ps1"
 $root=Get-GuardRoot;$tickets=Join-Path $root 'LaunchTickets';$ticketPath=Join-Path $tickets ($RequestId.ToString()+'.json')
 $ticket=[ordered]@{RequestId=$RequestId.ToString();OK=$false;FinishedUTC=$null;UserSid='';Executable='';ConfigSHA256='';Reports=@();Error='';ClaudeLaunched=$false};$code=1
@@ -21,6 +21,11 @@ try{
  Assert-NoClaude
  $c=Read-GuardConfig "$root\config.json";$state=Get-Content -Raw "$root\state.json" | ConvertFrom-Json
  $ticket.UserSid=$c.LaunchUserSid;$ticket.Executable=$state.LaunchExecutable;$ticket.ConfigSHA256=(Get-FileHash "$root\config.json").Hash
+ $ticket['Target']=$Target
+ if($Target -eq 'Cli'){
+  if(-not $c.CliExecutable -or $state.CliExecutable -ne $c.CliExecutable -or $c.CliExecutable -notin $state.Executables -or -not(Test-Path -LiteralPath $c.CliExecutable -PathType Leaf)){throw 'Standalone CLI not configured/protected. Run Update-CodeSupport.ps1 first.'}
+  $ticket.Executable=$c.CliExecutable;$ticket['ExecutableSHA256']=(Get-FileHash -LiteralPath $c.CliExecutable).Hash
+ }
  if($c.AppIdRequired){$ticket['AppIdSHA256']=(Get-FileHash "$root\AppId-state.json").Hash}
  $ticket.OK=$true;$code=0
 }catch{$ticket.Error=$_.Exception.Message;Write-Host $ticket.Error -ForegroundColor Red}

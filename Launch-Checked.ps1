@@ -1,7 +1,7 @@
 ﻿#requires -Version 5.1
 # ONLY this script contains the user-requested Claude launch branch.
 # Agent validation MUST use -CheckOnly. Preflight/Install/Fix never launch Claude.
-param([switch]$CheckOnly,[switch]$NoPause)
+param([switch]$CheckOnly,[switch]$NoPause,[ValidateSet('Desktop','Cli')][string]$Target='Desktop',[string[]]$CliArguments=@())
 $ErrorActionPreference='Stop';. "$PSScriptRoot\Common.ps1"
 $code=1
 try{
@@ -9,6 +9,7 @@ try{
  if($admin){throw 'Run this shortcut normally, not as Administrator. Claude must use the ordinary user token.'}
  $root=Get-GuardRoot;$c=Read-GuardConfig "$root\config.json";$userSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
  if($userSid -ne $c.LaunchUserSid){throw 'Shortcut belongs to a different configured user'}
+ if($Target -eq 'Cli' -and -not $c.CliExecutable){throw 'Standalone CLI is not configured. Run Update-CodeSupport.ps1 first.'}
  if(@(Get-Process -Name claude -ErrorAction SilentlyContinue).Count){throw 'Close Claude yourself before checked launch or CheckOnly'}
  # Transport belongs to protected Preflight: it can diagnose/repair changed TUN
  # rules before exercising SOCKS and HTTP CONNECT. An early curl probe prevented
@@ -17,20 +18,31 @@ try{
  if(-not $codeProxy.SettingsOK){throw ('Code settings do not match http://127.0.0.1:'+$c.ProxyPort+'. Close Claude, then run: & "'+$root+'\Configure-CodeProxy.ps1" -Mode Apply -ProxyPort '+$c.ProxyPort+' -ExpectedCountry '+$c.ExpectedCountry+'. No launch approval issued.')}
  Write-Host ('Code settings OK. Happ must be connected on 127.0.0.1:'+$c.ProxyPort+'; SnowVPN/FlClashX does not replace Happ.')
  $id=[Guid]::NewGuid();Write-Host 'Checking tunnel. A UAC request will open for checks/repair only. Claude is not running yet.'
- $exit=Invoke-ElevatedPowerShell ('-NoProfile -ExecutionPolicy Bypass -File "'+$root+'\Preflight.ps1" -RequestId '+$id)
+ $exit=Invoke-ElevatedPowerShell ('-NoProfile -ExecutionPolicy Bypass -File "'+$root+'\Preflight.ps1" -RequestId '+$id+' -Target '+$Target)
  $path=Join-Path $root ('LaunchTickets\'+$id+'.json')
  if($exit -ne 0 -or -not(Test-Path -LiteralPath $path)){throw ('Preflight failed/cancelled. Claude will NOT start. Ticket: '+$path)}
  # Re-read user settings after the administrative phase; changes cannot bypass
  # the proxy configuration requirement. This probe never performs network I/O.
  $codeProxy=& "$root\Configure-CodeProxy.ps1" -Mode Diagnose -SettingsOnly -ProxyPort $c.ProxyPort -ExpectedCountry $c.ExpectedCountry
  if(-not $codeProxy.SettingsOK){throw 'Code settings changed during preflight. No launch approval issued.'}
- $t=Read-ValidatedLaunchTicket $id $c
+ $t=Read-ValidatedLaunchTicket $id $c -Target $Target
  $state=Get-Content -Raw "$root\state.json" | ConvertFrom-Json
  if(Test-Path "$root\maintenance.txt"){throw 'Restore/maintenance incomplete. Finish Restore or Fix successfully before launch.'}
- if($t.Executable -ne $state.LaunchExecutable -or $t.Executable -notin $state.Executables -or -not(Test-Path -LiteralPath $t.Executable) -or [IO.Path]::GetFileName($t.Executable) -ne 'claude.exe'){throw 'Claude installation changed after check; run again'}
+ $launchExe=$state.LaunchExecutable;if($Target -eq 'Cli'){$launchExe=$state.CliExecutable}
+ if($t.Executable -ne $launchExe -or $t.Executable -notin $state.Executables -or -not(Test-Path -LiteralPath $t.Executable) -or [IO.Path]::GetFileName($t.Executable) -ine 'claude.exe'){throw 'Claude installation changed after check; run again'}
  # The elevated preflight has verified the background CoworkVMService separately.
  if(@(Get-Process -Name claude -ErrorAction SilentlyContinue).Count){throw 'Claude already started by another action; this launcher will not start another instance'}
  if($CheckOnly){Write-Host ('CHECK ONLY PASS. Claude NOT started. '+$path);$code=0}
+ elseif($Target -eq 'Cli'){
+  # The CLI keeps the calling terminal, current project directory and native
+  # stdout/stderr. Its process inherits proxy env; restore the shell afterwards.
+  . "$root\CodeProxy.Common.ps1"
+  $proxyEnv=Get-CodeProxyEnvironment ([int]$c.ProxyPort);$before=@{};$present=@{}
+  $allEnv=[Environment]::GetEnvironmentVariables('Process')
+  foreach($key in $proxyEnv.Keys){$present[$key]=$allEnv.Contains($key);$before[$key]=[Environment]::GetEnvironmentVariable($key,'Process');[Environment]::SetEnvironmentVariable($key,$proxyEnv[$key],'Process')}
+  try{try{Start-CoverageObserver}catch{Write-Warning $_.Exception.Message};& $t.Executable @CliArguments;$code=$LASTEXITCODE}
+  finally{foreach($key in $proxyEnv.Keys){$value=$null;if($present[$key]){$value=$before[$key]};[Environment]::SetEnvironmentVariable($key,$value,'Process')}}
+ }
  else{
   $arguments='--proxy-server=socks5://127.0.0.1:'+$c.ProxyPort+' --proxy-bypass-list=<-loopback> --disable-quic'
   # Native child processes inherit proxy env; Code settings are also checked above.

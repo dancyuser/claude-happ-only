@@ -4,6 +4,9 @@ function Read-GuardConfig([string]$path){
  $defaults=@{Schema=3;ProxyPort=10808;UpstreamPort=443;ExpectedCountry='DE';XrayPath=(Join-Path $env:ProgramFiles 'FlyFrogLLC\Happ\core\xray.exe');PackageFamily='Claude_pzs8sxrjxfjjc';ClaudeRoot='';ClaudeExe='';BlockedInterfaces=@('FlClashX');UseLegacyTag=$true;LaunchUserSid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value}
  foreach($key in $defaults.Keys){if(-not $c.PSObject.Properties[$key]){$c | Add-Member NoteProperty $key $defaults[$key]}}
  if(-not $c.PSObject.Properties['CodeRoot']){$c | Add-Member NoteProperty CodeRoot ''}
+ if(-not $c.PSObject.Properties['CliExecutable']){$c | Add-Member NoteProperty CliExecutable ''}
+ if(-not $c.PSObject.Properties['CliAutoDetect']){$c | Add-Member NoteProperty CliAutoDetect $true}
+ if($c.CliAutoDetect -isnot [bool]){throw 'CliAutoDetect must be boolean'}
  if(-not $c.PSObject.Properties['EndpointMode']){$c | Add-Member NoteProperty EndpointMode 'Hostname'}
  if(-not $c.PSObject.Properties['AppIdRequired']){$c | Add-Member NoteProperty AppIdRequired $false}
  if(-not $c.PSObject.Properties['AppIdMode']){$c | Add-Member NoteProperty AppIdMode 'Auto'}
@@ -45,8 +48,16 @@ function Get-ClaudeInventory($c){
  }
  # Desktop downloads Code outside WindowsApps. Protect existing cache EXEs too.
  if($c.CodeRoot){$files+=@(Get-CodeCacheExecutables ([string]$c.CodeRoot));$files=@($files | Sort-Object FullName -Unique)}
+ $cli=''
+ if($c.CliExecutable){$cli=Get-StandaloneCliExecutable ([string]$c.CliExecutable);if($cli){$files+=@(Get-Item -LiteralPath $cli);$files=@($files|Sort-Object FullName -Unique)}}
  if($files.Count -lt 1 -or $files.Count -gt 100 -or -not(Test-Path -LiteralPath $target)){throw 'Abnormal Claude executable inventory'}
- [pscustomobject]@{Files=$files;Packages=$packages;Executable=$target}
+ [pscustomobject]@{Files=$files;Packages=$packages;Executable=$target;CliExecutable=$cli}
+}
+function Get-StandaloneCliExecutable([string]$Path){
+ if(-not [IO.Path]::IsPathRooted($Path) -or $Path -match '[*?]' -or [IO.Path]::GetFileName($Path) -ine 'claude.exe'){throw 'CliExecutable must be an absolute exact claude.exe path'}
+ $full=[IO.Path]::GetFullPath($Path);$p=$full
+ while($p){if(Test-Path -LiteralPath $p){if((Get-Item -LiteralPath $p -Force).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Reparse point in CliExecutable path'}};$next=Split-Path $p -Parent;if($next -eq $p){break};$p=$next}
+ if(Test-Path -LiteralPath $full -PathType Leaf){return $full};return ''
 }
 function Get-CodeCacheExecutables([string]$Path){
  if(-not [IO.Path]::IsPathRooted($Path)){throw 'CodeRoot must be absolute'}
@@ -100,7 +111,7 @@ function Invoke-ElevatedPowerShell([string]$arguments){
  $info=New-Object Diagnostics.ProcessStartInfo;$info.FileName="$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe";$info.Arguments=$arguments;$info.UseShellExecute=$true;$info.Verb='runas'
  $process=[Diagnostics.Process]::Start($info);$null=$process.Handle;$process.WaitForExit();$code=$process.ExitCode;$process.Dispose();return [int]$code
 }
-function Read-ValidatedLaunchTicket([guid]$RequestId,$Configuration){
+function Read-ValidatedLaunchTicket([guid]$RequestId,$Configuration,[ValidateSet('Desktop','Cli')][string]$Target='Desktop'){
  $root=Get-GuardRoot;$path=Join-Path $root ('LaunchTickets\'+$RequestId+'.json')
  $t=Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
  $age=([DateTime]::UtcNow-[DateTime]::Parse($t.FinishedUTC).ToUniversalTime()).TotalSeconds
@@ -108,7 +119,13 @@ function Read-ValidatedLaunchTicket([guid]$RequestId,$Configuration){
  if(-not $t.OK -or $t.RequestId -ne $RequestId.ToString() -or $t.UserSid -ne $sid -or $Configuration.LaunchUserSid -ne $sid -or $age -lt 0 -or $age -gt 30 -or $t.ConfigSHA256 -ne (Get-FileHash "$root\config.json").Hash){throw 'Invalid, stale or mismatched preflight result'}
  $state=Get-Content "$root\state.json" -Raw | ConvertFrom-Json
  if(Test-Path "$root\maintenance.txt"){throw 'Restore/maintenance incomplete'}
- if($t.Executable -ne $state.LaunchExecutable -or $t.Executable -notin $state.Executables -or -not(Test-Path -LiteralPath $t.Executable) -or [IO.Path]::GetFileName($t.Executable) -ne 'claude.exe'){throw 'Executable changed after preflight'}
+ $expected=$state.LaunchExecutable
+ if($Target -eq 'Cli'){
+  $expected=$state.CliExecutable
+  if($t.Target -ne 'Cli' -or -not $expected -or $expected -ne $Configuration.CliExecutable -or -not $t.ExecutableSHA256){throw 'CLI target/configuration not bound to preflight'}
+ }elseif($t.Target -and $t.Target -ne 'Desktop'){throw 'Wrong preflight target'}
+ if($t.Executable -ne $expected -or $t.Executable -notin $state.Executables -or -not(Test-Path -LiteralPath $t.Executable) -or [IO.Path]::GetFileName($t.Executable) -ine 'claude.exe'){throw 'Executable changed after preflight'}
+ if($Target -eq 'Cli' -and $t.ExecutableSHA256 -ne (Get-FileHash -LiteralPath $expected).Hash){throw 'CLI executable changed after preflight'}
  if($Configuration.AppIdRequired){if(-not $t.AppIdSHA256 -or $t.AppIdSHA256 -ne (Get-FileHash "$root\AppId-state.json").Hash){throw 'AppID state changed after preflight'}}
  return $t
 }

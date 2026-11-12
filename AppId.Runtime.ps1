@@ -26,10 +26,10 @@ function Assert-ActiveAppId($Configuration){
  $policy=@(Get-AppIdPolicies | Where-Object {$_.Id -ieq $state.PolicyId})
  if($policy.Count -ne 1 -or -not $policy[0].Active -or $policy[0].Hash -ne $state.BinaryHash){throw 'APPID_NOT_ACTIVE_OR_CHANGED'}
 }
-function Invoke-PreflightWorker([guid]$RequestId){
+function Invoke-PreflightWorker([guid]$RequestId,[ValidateSet('Desktop','Cli')][string]$Target='Desktop'){
  $root=Get-GuardRoot;$si=New-Object Diagnostics.ProcessStartInfo
  $si.FileName="$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
- $si.Arguments='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$root+'\Preflight.ps1" -RequestId '+$RequestId
+ $si.Arguments='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$root+'\Preflight.ps1" -RequestId '+$RequestId+' -Target '+$Target
  $si.UseShellExecute=$false;$si.CreateNoWindow=$true;$si.RedirectStandardOutput=$true;$si.RedirectStandardError=$true
  $p=New-Object Diagnostics.Process;$p.StartInfo=$si
  try{$null=$p.Start();$o=$p.StandardOutput.ReadToEndAsync();$e=$p.StandardError.ReadToEndAsync();if(-not $p.WaitForExit(180000)){$p.Kill();$p.WaitForExit();throw 'PREFLIGHT_TIMEOUT: no launch approval'};if($p.ExitCode -ne 0){throw ('Preflight failed: '+$o.Result+$e.Result)}}finally{$p.Dispose()}

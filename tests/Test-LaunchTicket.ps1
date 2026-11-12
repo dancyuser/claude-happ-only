@@ -23,4 +23,13 @@ $ticket | Add-Member NoteProperty AppIdSHA256 (Get-FileHash "$fixture\AppId-stat
 Write-Ticket;$null=Read-ValidatedLaunchTicket $id $c
 [IO.File]::AppendAllText("$fixture\AppId-state.json",' ')
 $rejected=$false;try{$null=Read-ValidatedLaunchTicket $id $c}catch{$rejected=$true};if(-not $rejected){throw 'Changed AppID state accepted'}
-'PASS: shared installer/launcher ticket validation, stale/user refusal and AppID-state fingerprint binding. No target launch.'
+$c.AppIdRequired=$false;$c|Add-Member NoteProperty CliExecutable $exe
+$c|ConvertTo-Json|Set-Content "$fixture\config.json" -Encoding UTF8
+$ticket.ConfigSHA256=(Get-FileHash "$fixture\config.json").Hash
+[pscustomobject]@{LaunchExecutable=$exe;CliExecutable=$exe;Executables=@($exe)}|ConvertTo-Json|Set-Content "$fixture\state.json" -Encoding UTF8
+$rejected=$false;Write-Ticket;try{$null=Read-ValidatedLaunchTicket $id $c -Target Cli}catch{$rejected=$true};if(-not $rejected){throw 'Desktop ticket accepted for CLI'}
+$ticket|Add-Member NoteProperty Target 'Cli';$ticket|Add-Member NoteProperty ExecutableSHA256 (Get-FileHash $exe).Hash;Write-Ticket
+$null=Read-ValidatedLaunchTicket $id $c -Target Cli
+$rejected=$false;try{$null=Read-ValidatedLaunchTicket $id $c -Target Desktop}catch{$rejected=$true};if(-not $rejected){throw 'CLI ticket accepted for Desktop'}
+[IO.File]::AppendAllText($exe,'changed');$rejected=$false;try{$null=Read-ValidatedLaunchTicket $id $c -Target Cli}catch{$rejected=$true};if(-not $rejected){throw 'Changed CLI binary accepted'}
+'PASS: stale/user/AppID refusal; Desktop/CLI ticket separation and CLI binary fingerprint. No target launch.'

@@ -10,6 +10,12 @@ $inventory=Get-ClaudeInventory $config
 if($inventory.Files.Count -ne 3 -or $inventory.Executable -ne $config.ClaudeExe){throw 'Cache inventory changed launch target or omitted Code versions'}
 $config.CodeRoot=Join-Path $fixture 'missing\claude-code'
 if((Get-ClaudeInventory $config).Files.Count -ne 1){throw 'Absent cache rejected'}
+$cli=Join-Path $fixture '.local\bin\claude.exe';New-Item -ItemType Directory (Split-Path $cli -Parent) -Force|Out-Null;[IO.File]::WriteAllText($cli,'NONEXECUTABLE CLI FIXTURE')
+$config|Add-Member NoteProperty CliExecutable $cli
+$inventory=Get-ClaudeInventory $config
+if($inventory.Files.Count -ne 2 -or $inventory.CliExecutable -ne $cli -or $inventory.Executable -ne $config.ClaudeExe){throw 'Standalone CLI omitted or Desktop target replaced'}
+$config.CliExecutable=Join-Path $fixture 'absent\claude.exe';if((Get-ClaudeInventory $config).CliExecutable){throw 'Missing CLI accepted as launchable'}
+$bad=$false;try{$null=Get-StandaloneCliExecutable (Join-Path $fixture 'wrong.exe')}catch{$bad=$true};if(-not $bad){throw 'Wrong CLI executable accepted'}
 $rejected=$false;try{$null=Get-CodeCacheExecutables $fixture}catch{$rejected=$true}
 if(-not $rejected){throw 'Broad non-cache root accepted'}
 'PASS: both cached Code versions included, launch target unchanged, absent cache supported, broad root rejected; no EXEs executed.'
