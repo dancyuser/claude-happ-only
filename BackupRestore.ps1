@@ -77,8 +77,8 @@ function New-GuardBackup($Candidate,[string]$TaskXmlBefore,[bool]$TaskExistsBefo
  Write-Host ('BACKUP: '+$dir)
  return $dir
 }
-function Add-RouteIntent([string]$backup,[string]$prefix,[int]$index,[string]$hop,[string]$store){
- $p=Join-Path $backup 'route-journal.json';$items=@(Read-JSONArray $p);$items+=@([pscustomobject]@{Prefix=$prefix;InterfaceIndex=$index;NextHop=$hop;Metric=1;Store=$store});Save-JSON $items $p
+function Add-RouteIntent([string]$backup,[string]$prefix,[int]$index,[string]$hop,[string]$store,[int]$metric=1){
+ $p=Join-Path $backup 'route-journal.json';$items=@(Read-JSONArray $p);$items+=@([pscustomobject]@{Prefix=$prefix;InterfaceIndex=$index;NextHop=$hop;Metric=$metric;Store=$store});Save-JSON $items $p
 }
 function Read-VerifiedBackup([string]$id){
  if($id -notmatch '^\d{8}-\d{6}-\d{3}-[a-f0-9]{8}$'){throw 'BackupId must be an ID listed by Restore, not an arbitrary path'}

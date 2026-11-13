@@ -123,38 +123,61 @@ try {
  $tunnel=Resolve-GuardBlockedInterfaces $config
  $blockedInterfaces=@($tunnel.Aliases)
  if($tunnel.Automatic){Write-Host ('TUN SELECTED: '+$tunnel.SelectedTun)}
- $nic=Get-NetAdapter -Name $config.PhysicalInterface
+ $physicalRows=@(Resolve-GuardPhysicalUplinks $config @(Get-NetAdapter -IncludeHidden))
+ if($physicalRows.Count){
+  $selected=@($physicalRows|Where-Object Up|Select-Object -First 1);if(-not $selected.Count){throw 'All configured physical uplinks are down'}
+  $nic=Get-NetAdapter -InterfaceIndex $selected[0].Index
+  $result['PhysicalUplinks']=$physicalRows;$result['SelectedPhysicalInterface']=$nic.Name
+ }else{$nic=Get-NetAdapter -Name $config.PhysicalInterface}
  if($nic.Status -ne 'Up' -or -not $nic.HardwareInterface){throw 'Configured physical network adapter is not Up. Restore its connection; virtual adapters are not selected.'}
  $network=Get-NetIPConfiguration -InterfaceIndex $nic.ifIndex
  $gateway=@($network.IPv4DefaultGateway.NextHop);$local=@($network.IPv4Address.IPAddress | Where-Object {$_ -notlike '169.254.*'})
  if($gateway.Count -ne 1 -or $local.Count -ne 1){throw 'Ethernet needs exactly one IPv4 address and gateway. Check Windows adapter settings.'}
+ if($physicalRows.Count -and $selected[0].Gateway -ne $gateway[0]){throw 'Configured physical gateway changed; reconfigure the approved uplink explicitly'}
+ $approvedLocal=@($local);$dnsCandidates=@([pscustomobject]@{Index=$nic.ifIndex;Local=$local[0]})
+ if($physicalRows.Count){
+  $approvedLocal=@();$dnsCandidates=@()
+  foreach($row in @($physicalRows|Where-Object Up)){
+   $net=Get-NetIPConfiguration -InterfaceIndex $row.Index
+   $ips=@($net.IPv4Address.IPAddress|Where-Object {$_ -notlike '169.254.*'});$hops=@($net.IPv4DefaultGateway.NextHop)
+   if($ips.Count -ne 1 -or $hops.Count -ne 1 -or $hops[0] -ne $row.Gateway){throw 'Approved physical uplink IPv4/gateway changed; reconfigure explicitly'}
+   $approvedLocal+=@($ips[0]);$dnsCandidates+=@([pscustomobject]@{Index=$row.Index;Local=$ips[0]})
+  }
+ }
  Add-Type -Path "$PSScriptRoot\DirectDoh.cs"
  Add-Type -Path "$root\HappOnlyWfp.cs"
  $answers=@();$dnsOK=$false;$endpointOK=$false
  if($config.EndpointMode -eq 'PinnedIPv4'){
   $ip=[string]$config.UpstreamAddress;$endpointOK=$true
- }else{try{
-  foreach($dns in @(@('1.1.1.1','cloudflare-dns.com','/dns-query?name='),@('8.8.8.8','dns.google','/resolve?name='))){
-   $j=[DirectDoh]::Query($dns[0],$dns[1],($dns[2]+$config.UpstreamHostname+'&type=A'),$nic.ifIndex,$local[0]) | ConvertFrom-Json
-   $a=@($j.Answer | Where-Object type -eq 1 | Select-Object -ExpandProperty data -Unique)
-   if($j.Status -ne 0 -or $a.Count -ne 1){throw 'DNS response is not one unique IPv4 address'}
-   $answers+=@([string]$a[0])
-  }
-  $ip=$answers[0]
-  if($answers[0] -ne $answers[1] -or -not(Test-GuardPublicIPv4 $ip)){throw 'DNS disagreement or unsupported/non-public answer; no pin update'}
-  $dnsOK=$true;$endpointOK=$true
- }catch{$issues.Add('DNS_UNVERIFIED: '+$_.Exception.Message+'. Keep current pin; check physical DNS HTTPS and retry Fix.cmd.');$ip=[string]$config.UpstreamAddress}}
+ }else{
+  $dnsFailures=@()
+  foreach($candidate in $dnsCandidates){try{
+   $answers=@()
+   foreach($dns in @(@('1.1.1.1','cloudflare-dns.com','/dns-query?name='),@('8.8.8.8','dns.google','/resolve?name='))){
+    $j=[DirectDoh]::Query($dns[0],$dns[1],($dns[2]+$config.UpstreamHostname+'&type=A'),$candidate.Index,$candidate.Local)|ConvertFrom-Json
+    $a=@($j.Answer|Where-Object type -eq 1|Select-Object -ExpandProperty data -Unique)
+    if($j.Status -ne 0 -or $a.Count -ne 1){throw 'DNS response is not one unique IPv4 address'}
+    $answers+=@([string]$a[0])
+   }
+   $ip=$answers[0]
+   if($answers[0] -ne $answers[1] -or -not(Test-GuardPublicIPv4 $ip)){throw 'DNS disagreement or unsupported/non-public answer; no pin update'}
+   $dnsOK=$true;$endpointOK=$true;$result['DNSPhysicalInterfaceIndex']=$candidate.Index;break
+  }catch{$dnsFailures+=@($_.Exception.Message)}}
+  if(-not $dnsOK){$issues.Add('DNS_UNVERIFIED: '+($dnsFailures -join '; ')+'. Keep current pin; check physical DNS HTTPS and retry Fix.cmd.');$ip=[string]$config.UpstreamAddress}
+ }
  $result['EndpointMode']=$config.EndpointMode;$result['EndpointVerified']=$endpointOK
  $result['DNSVerified']=$dnsOK;$result['ResolvedAddress']=$ip;$result['PreviousPin']=$previousPin
  if($Mode -ne 'Diagnose'){
   if(-not $endpointOK -and -not $config.UpstreamAddress){throw 'First install needs verified endpoint: agreeing DNS answers or explicit public PinnedIPv4'}
   if($config.UpstreamAddress){& "$root\Sync-Guard.ps1" -Mode Sync | Out-File "$out\sync-before.log"}
   Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True
+  if($physicalRows.Count){Ensure-GuardUplinkRoutes $config $ip $physicalRows $backup}else{
   $routes=@(Get-NetRoute -DestinationPrefix ($ip+'/32') -ErrorAction SilentlyContinue)
   foreach($r in $routes){if($r.InterfaceIndex -ne $nic.ifIndex -or $r.NextHop -ne $gateway[0]){throw 'Conflicting exact route. Inspect route print; this script will not delete routes owned by other software.'}}
   if(-not $routes.Count){Add-RouteIntent $backup ($ip+'/32') $nic.ifIndex $gateway[0] 'ActiveStore';if(-not @(Get-NetRoute -DestinationPrefix ($ip+'/32') -PolicyStore PersistentStore -ErrorAction SilentlyContinue).Count){Add-RouteIntent $backup ($ip+'/32') $nic.ifIndex $gateway[0] 'PersistentStore'};New-NetRoute -DestinationPrefix ($ip+'/32') -InterfaceIndex $nic.ifIndex -NextHop $gateway[0] -RouteMetric 1 | Out-Null}
   $persistent=@(Get-NetRoute -DestinationPrefix ($ip+'/32') -PolicyStore PersistentStore -ErrorAction SilentlyContinue)
   if(-not $persistent.Count){Add-RouteIntent $backup ($ip+'/32') $nic.ifIndex $gateway[0] 'PersistentStore';New-NetRoute -DestinationPrefix ($ip+'/32') -InterfaceIndex $nic.ifIndex -NextHop $gateway[0] -RouteMetric 1 -PolicyStore PersistentStore | Out-Null}
+  }
   if($blockedInterfaces.Count){Ensure-XrayTunnelRule $blockedInterfaces}
   Firewall-Rule 'Happ-Xray-Lock-OtherIPv4' (Outside-IPv4 $ip)
   Firewall-Rule 'Happ-Xray-Lock-OtherTCPPorts' @($ip) 'TCP' @(Get-OtherPorts $config.UpstreamPort)
@@ -199,7 +222,7 @@ try {
   if($owner.ExecutablePath -ne $xray){$issues.Add('WRONG_PROXY_OWNER: port 10808 belongs to another executable. Do not launch Claude; inspect the port owner.')}
   else{try{
    $connections=@(Get-NetTCPConnection -OwningProcess $owner.ProcessId -State Established -ErrorAction SilentlyContinue | Where-Object {$_.RemoteAddress -notin @('127.0.0.1','::1')})
-   if(@($connections | Where-Object {$_.RemoteAddress -ne $config.UpstreamAddress -or $_.RemotePort -ne $config.UpstreamPort -or $_.LocalAddress -notin $local}).Count){throw 'Happ core has a connection outside the pinned physical path. Reconnect the configured server in Happ.'}
+   if(@($connections | Where-Object {$_.RemoteAddress -ne $config.UpstreamAddress -or $_.RemotePort -ne $config.UpstreamPort -or $_.LocalAddress -notin $approvedLocal}).Count){throw 'Happ core has a connection outside the pinned physical path. Reconnect the configured server in Happ.'}
    Write-Host 'Checking protected SOCKS/HTTP proxy and blocked bypass paths...'
    $probeResult=& "$PSScriptRoot\Test-Protected.ps1" -Root $root -OutputDirectory $out -Upstream $config.UpstreamAddress -ProxyPort $port -Country $config.ExpectedCountry -UpstreamPort $config.UpstreamPort;$result['Experiment']=$probeResult
    if(-not $probeResult.OverallOK){$issues.Add('NETWORK_TEST_FAILED: see experiment.json. Reconnect the SAME server in Happ and rerun Diagnose.cmd. If it persists, check the provider/server; do not relax firewall.')}

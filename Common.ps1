@@ -7,6 +7,7 @@ function Read-GuardConfig([string]$path){
  if(-not $c.PSObject.Properties['CliExecutable']){$c | Add-Member NoteProperty CliExecutable ''}
  if(-not $c.PSObject.Properties['CliAutoDetect']){$c | Add-Member NoteProperty CliAutoDetect $true}
  if($c.CliAutoDetect -isnot [bool]){throw 'CliAutoDetect must be boolean'}
+ if(-not $c.PSObject.Properties['PhysicalUplinks']){$c|Add-Member NoteProperty PhysicalUplinks @()}
  if(-not $c.PSObject.Properties['EndpointMode']){$c | Add-Member NoteProperty EndpointMode 'Hostname'}
  if(-not $c.PSObject.Properties['AppIdRequired']){$c | Add-Member NoteProperty AppIdRequired $false}
  if(-not $c.PSObject.Properties['AppIdMode']){$c | Add-Member NoteProperty AppIdMode 'Auto'}
@@ -33,6 +34,53 @@ function Test-GuardPublicIPv4([string]$Address){
  if(($b[0] -eq 169 -and $b[1] -eq 254) -or ($b[0] -eq 172 -and $b[1] -ge 16 -and $b[1] -le 31) -or ($b[0] -eq 192 -and $b[1] -eq 168) -or ($b[0] -eq 100 -and $b[1] -ge 64 -and $b[1] -le 127) -or ($b[0] -eq 198 -and $b[1] -in @(18,19))){return $false}
  if(($b[0] -eq 192 -and $b[1] -eq 0 -and $b[2] -in @(0,2)) -or ($b[0] -eq 198 -and $b[1] -eq 51 -and $b[2] -eq 100) -or ($b[0] -eq 203 -and $b[1] -eq 0 -and $b[2] -eq 113)){return $false}
  return $true
+}
+function Resolve-GuardPhysicalUplinks($Configuration,$Adapters){
+ $entries=@($Configuration.PhysicalUplinks)
+ if(-not $entries.Count){return @()}
+ if($entries.Count -gt 8){throw 'At most eight physical uplinks are supported'}
+ $seen=@();$rows=@();$lastMetric=0
+ foreach($e in $entries){
+  $id=([guid]$e.InterfaceGuid).ToString()
+  if($id -in $seen -or [guid]$id -eq [guid]::Empty){throw 'Duplicate/empty physical interface GUID'};$seen+=@($id)
+  $ip=$null;if(-not [Net.IPAddress]::TryParse([string]$e.Gateway,[ref]$ip) -or $ip.AddressFamily -ne 'InterNetwork' -or [Net.IPAddress]::IsLoopback($ip) -or $ip.Equals([Net.IPAddress]::Any)){throw 'Physical gateway must be an IPv4 address'}
+  if([string]$e.RouteMetric -notmatch '^\d+$' -or [int]$e.RouteMetric -le $lastMetric -or [int]$e.RouteMetric -gt 65535){throw 'Physical route metrics must be strictly increasing, 1..65535'};$lastMetric=[int]$e.RouteMetric
+  $found=@($Adapters|Where-Object {([string]$_.InterfaceGuid).Trim('{}') -ieq $id})
+  if($found.Count -ne 1 -or -not $found[0].HardwareInterface){throw ('Configured physical GUID missing, ambiguous or virtual: '+$id)}
+  $a=$found[0];$rows+=@([pscustomobject]@{InterfaceGuid=$id;Name=[string]$a.Name;Index=[int]$a.ifIndex;Up=([string]$a.Status -eq 'Up');Gateway=$ip.ToString();Metric=[int]$e.RouteMetric})
+ }
+ return @($rows)
+}
+function Assert-GuardUplinkRoutes($Configuration,[string]$Endpoint,$Rows){
+ foreach($store in @('ActiveStore','PersistentStore')){
+  $routes=@(Get-NetRoute -DestinationPrefix ($Endpoint+'/32') -PolicyStore $store -ErrorAction SilentlyContinue)
+  foreach($r in $routes){if(-not @($Rows|Where-Object {$_.Index -eq $r.InterfaceIndex -and $_.Gateway -eq $r.NextHop -and $_.Metric -eq $r.RouteMetric}).Count){throw ('Unknown/conflicting pinned route in '+$store+'; no automatic removal')}}
+  foreach($row in $Rows){if($store -eq 'ActiveStore' -and -not $row.Up){continue};if(-not @($routes|Where-Object {$_.InterfaceIndex -eq $row.Index -and $_.NextHop -eq $row.Gateway -and $_.RouteMetric -eq $row.Metric}).Count){throw ('Missing pinned uplink route: '+$row.Name+' in '+$store)}}
+ }
+ if(-not @($Rows|Where-Object Up).Count){throw 'All configured physical uplinks are down; no direct fallback permitted'}
+}
+function Ensure-GuardUplinkRoutes($Configuration,[string]$Endpoint,$Rows,[string]$Backup){
+ # Add both host routes while connected. Windows switches the usable host route
+ # on link loss; the minute-based task is not the failover mechanism.
+ foreach($store in @('ActiveStore','PersistentStore')){
+  $routes=@(Get-NetRoute -DestinationPrefix ($Endpoint+'/32') -PolicyStore $store -ErrorAction SilentlyContinue)
+  foreach($r in $routes){if(-not @($Rows|Where-Object {$_.Index -eq $r.InterfaceIndex -and $_.Gateway -eq $r.NextHop -and $_.Metric -eq $r.RouteMetric}).Count){throw ('Conflicting pinned route in '+$store+'; preserve and review')}}
+ }
+ foreach($row in $Rows){
+  $active=@(Get-NetRoute -DestinationPrefix ($Endpoint+'/32') -PolicyStore ActiveStore -ErrorAction SilentlyContinue|Where-Object {$_.InterfaceIndex -eq $row.Index -and $_.NextHop -eq $row.Gateway -and $_.RouteMetric -eq $row.Metric})
+  $saved=@(Get-NetRoute -DestinationPrefix ($Endpoint+'/32') -PolicyStore PersistentStore -ErrorAction SilentlyContinue|Where-Object {$_.InterfaceIndex -eq $row.Index -and $_.NextHop -eq $row.Gateway -and $_.RouteMetric -eq $row.Metric})
+  if(-not $saved.Count){
+   # New-NetRoute without PolicyStore writes BOTH stores. PersistentStore is
+   # queryable but is not a valid explicit creation parameter on this Windows.
+   Add-RouteIntent $Backup ($Endpoint+'/32') $row.Index $row.Gateway 'PersistentStore' $row.Metric
+   if($active.Count){$active|Remove-NetRoute -Confirm:$false -ErrorAction Stop}else{Add-RouteIntent $Backup ($Endpoint+'/32') $row.Index $row.Gateway 'ActiveStore' $row.Metric}
+   New-NetRoute -DestinationPrefix ($Endpoint+'/32') -InterfaceIndex $row.Index -NextHop $row.Gateway -RouteMetric $row.Metric -ErrorAction Stop|Out-Null
+  }elseif(-not $active.Count -and $row.Up){
+   Add-RouteIntent $Backup ($Endpoint+'/32') $row.Index $row.Gateway 'ActiveStore' $row.Metric
+   New-NetRoute -DestinationPrefix ($Endpoint+'/32') -InterfaceIndex $row.Index -NextHop $row.Gateway -RouteMetric $row.Metric -PolicyStore ActiveStore -ErrorAction Stop|Out-Null
+  }
+ }
+ Assert-GuardUplinkRoutes $Configuration $Endpoint $Rows
 }
 function Get-ClaudeInventory($c){
  if($c.ClaudeRoot){

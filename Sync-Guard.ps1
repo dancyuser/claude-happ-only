@@ -28,8 +28,11 @@ try{
  $keys+=@($wfp.RestrictProgram($config.XrayPath,$endpoint,[int]$config.UpstreamPort,$true));$keys+=@($wfp.ReservePort($config.XrayPath,$port,$true));$keys=@($keys | Sort-Object -Unique)
  if($Mode -eq 'Verify'){
   if(@(Get-NetFirewallProfile -PolicyStore ActiveStore | Where-Object {[string]$_.Enabled -ne 'True'}).Count){throw 'Firewall profile disabled'}
-  $route=@(Get-NetRoute -DestinationPrefix ($endpoint+'/32') -PolicyStore ActiveStore)
-  if($route.Count -ne 1 -or $route[0].InterfaceAlias -ne $config.PhysicalInterface -or $route[0].NextHop -ne $config.Gateway){throw 'Pinned endpoint route mismatch'}
+  $physicalRows=@(Resolve-GuardPhysicalUplinks $config @(Get-NetAdapter -IncludeHidden))
+  if($physicalRows.Count){Assert-GuardUplinkRoutes $config $endpoint $physicalRows}else{
+   $route=@(Get-NetRoute -DestinationPrefix ($endpoint+'/32') -PolicyStore ActiveStore)
+   if($route.Count -ne 1 -or $route[0].InterfaceAlias -ne $config.PhysicalInterface -or $route[0].NextHop -ne $config.Gateway){throw 'Pinned endpoint route mismatch'}
+  }
   if($old.LaunchExecutable -ne $inventory.Executable){throw 'Package changed since last synchronization'}
   if([string]$old.CliExecutable -ne [string]$inventory.CliExecutable){throw 'CLI inventory changed since last synchronization'}
   'STATIC VERIFY PASS';return

@@ -19,6 +19,8 @@ if((@(Get-OtherPorts 65535)-join ',') -ne '1-65534'){throw 'Upper port bound mis
 & "$PSScriptRoot\Test-UserMaintenanceGuard.ps1"
 & "$PSScriptRoot\Test-SetupConfiguration.ps1"
 & "$PSScriptRoot\Test-TunnelSelection.ps1"
+& "$PSScriptRoot\Test-PhysicalUplinks.ps1"
+& "$PSScriptRoot\Test-UplinkRestore.ps1"
 & "$PSScriptRoot\Test-AppId.ps1"
 & "$PSScriptRoot\Test-AppIdDeployment.ps1"
 & "$PSScriptRoot\Test-LaunchTicket.ps1"

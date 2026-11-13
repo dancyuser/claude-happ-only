@@ -39,12 +39,30 @@ try{
   $wasPresent=@($beforeRoutes | Where-Object {$_.Store -eq $route.Store -and $_.Prefix -eq $route.Prefix -and $_.InterfaceIndex -eq $route.InterfaceIndex -and $_.NextHop -eq $route.NextHop})
   if(-not $wasPresent.Count){Get-NetRoute -DestinationPrefix $route.Prefix -PolicyStore $route.Store -ErrorAction SilentlyContinue | Where-Object {$_.InterfaceIndex -eq $route.InterfaceIndex -and $_.NextHop -eq $route.NextHop -and $_.RouteMetric -eq $route.Metric} | Remove-NetRoute -Confirm:$false}
  }
+ $routeAdapters=@(Get-NetAdapter -IncludeHidden)
  foreach($route in @($beforeRoutes | Where-Object {$_.Prefix -eq ($target.UpstreamAddress+'/32')})){
-  $adapter=@(Get-NetAdapter -IncludeHidden | Where-Object {[string]$_.InterfaceGuid -eq $route.InterfaceGuid});if($adapter.Count -ne 1){throw 'Saved physical adapter missing'}
+  $adapter=@($routeAdapters | Where-Object {([guid]$_.InterfaceGuid) -eq ([guid]$route.InterfaceGuid)});if($adapter.Count -ne 1){throw 'Saved physical adapter missing'}
   $existing=@(Get-NetRoute -DestinationPrefix $route.Prefix -PolicyStore $route.Store -ErrorAction SilentlyContinue)
-  if(@($existing | Where-Object {$_.InterfaceIndex -ne $adapter[0].ifIndex -or $_.NextHop -ne $route.NextHop}).Count){throw 'Route changed outside this guard; automatic overwrite refused'}
-  if(-not $existing.Count){New-NetRoute -DestinationPrefix $route.Prefix -InterfaceIndex $adapter[0].ifIndex -NextHop $route.NextHop -RouteMetric $route.Metric -PolicyStore $route.Store | Out-Null}
-  else{$existing | Where-Object RouteMetric -ne $route.Metric | Set-NetRoute -RouteMetric $route.Metric -Confirm:$false | Out-Null}
+  foreach($r in $existing){
+   $allowed=@($beforeRoutes|Where-Object {$_.Store -eq $route.Store -and $_.Prefix -eq $route.Prefix -and $_.NextHop -eq $r.NextHop}|Where-Object {
+    $g=$_.InterfaceGuid;@($routeAdapters|Where-Object {([guid]$_.InterfaceGuid) -eq ([guid]$g) -and $_.ifIndex -eq $r.InterfaceIndex}).Count -eq 1
+   });if(-not $allowed.Count){throw 'Route changed outside this guard; automatic overwrite refused'}
+  }
+  $same=@($existing|Where-Object {$_.InterfaceIndex -eq $adapter[0].ifIndex -and $_.NextHop -eq $route.NextHop})
+  if(-not $same.Count){
+   if($route.Store -eq 'PersistentStore'){
+    # Creation without PolicyStore writes both stores; explicit PersistentStore
+    # creation is rejected by NetTCPIP. Preserve the saved active-store state.
+    $active=@(Get-NetRoute -DestinationPrefix $route.Prefix -PolicyStore ActiveStore -ErrorAction SilentlyContinue|Where-Object {$_.InterfaceIndex -eq $adapter[0].ifIndex -and $_.NextHop -eq $route.NextHop})
+    $savedActive=@($beforeRoutes|Where-Object {$_.Store -eq 'ActiveStore' -and $_.Prefix -eq $route.Prefix -and ([guid]$_.InterfaceGuid) -eq ([guid]$route.InterfaceGuid) -and $_.NextHop -eq $route.NextHop})
+    if($active.Count -and -not $savedActive.Count){throw 'Unexpected active route; refuse automatic persistent recreation'}
+    if($active.Count){$active|Remove-NetRoute -Confirm:$false}
+    New-NetRoute -DestinationPrefix $route.Prefix -InterfaceIndex $adapter[0].ifIndex -NextHop $route.NextHop -RouteMetric $route.Metric | Out-Null
+    if(-not $savedActive.Count){Get-NetRoute -DestinationPrefix $route.Prefix -PolicyStore ActiveStore|Where-Object {$_.InterfaceIndex -eq $adapter[0].ifIndex -and $_.NextHop -eq $route.NextHop}|Remove-NetRoute -Confirm:$false}
+    else{Get-NetRoute -DestinationPrefix $route.Prefix -PolicyStore ActiveStore|Where-Object {$_.InterfaceIndex -eq $adapter[0].ifIndex -and $_.NextHop -eq $route.NextHop}|Set-NetRoute -RouteMetric $savedActive[0].Metric -Confirm:$false|Out-Null}
+   }else{New-NetRoute -DestinationPrefix $route.Prefix -InterfaceIndex $adapter[0].ifIndex -NextHop $route.NextHop -RouteMetric $route.Metric -PolicyStore ActiveStore | Out-Null}
+  }
+  else{$same | Where-Object RouteMetric -ne $route.Metric | Set-NetRoute -RouteMetric $route.Metric -Confirm:$false | Out-Null}
  }
  foreach($file in $meta.Files){$path=Join-Path $root $file.Name;if($file.Exists){Copy-Item -LiteralPath (Join-Path "$dir\files" $file.Name) -Destination $path -Force;Set-ProtectedFile $path}else{if(Test-Path -LiteralPath $path){Remove-Item -LiteralPath $path -Force}}}
  foreach($shortcut in $meta.Shortcuts){if($shortcut.Exists){Copy-Item -LiteralPath (Join-Path $dir $shortcut.File) -Destination $shortcut.Path -Force}else{if(Test-Path -LiteralPath $shortcut.Path){Remove-Item -LiteralPath $shortcut.Path -Force}}}
