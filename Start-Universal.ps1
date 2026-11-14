@@ -7,7 +7,7 @@ try{
  $profile=Join-Path (Get-UniversalRoot) ('Profiles\'+$ProfileId)
  $c=ConvertTo-UniversalProfile (Get-Content "$profile\config.json" -Raw|ConvertFrom-Json)
  if($c.LaunchUserSid -ne [Security.Principal.WindowsIdentity]::GetCurrent().User.Value){throw 'Wrong configured user'}
- if(-not $Executable){$Executable=$c.Programs[0]};$Executable=[IO.Path]::GetFullPath($Executable)
+ if(-not $Executable){$Executable=if($c.PSObject.Properties['DesktopExecutable']){$c.DesktopExecutable}else{$c.Programs[0]}};$Executable=[IO.Path]::GetFullPath($Executable)
  if($Executable -notin $c.Programs){throw 'Executable is not in protected profile'}
  $id=[guid]::NewGuid()
  $exit=Invoke-ElevatedPowerShell ('-NoProfile -ExecutionPolicy Bypass -File "'+$profile+'\Universal.Worker.ps1" -Mode Test -ProfileId '+$ProfileId+' -RequestId '+$id)
@@ -16,6 +16,7 @@ try{
  $age=([DateTime]::UtcNow-[DateTime]::Parse($r.FinishedUTC).ToUniversalTime()).TotalSeconds
  if($r.Status -ne 'TESTED' -or -not $r.Ready -or $r.ProfileId -ne $ProfileId.ToString() -or $age -lt 0 -or $age -gt 30 -or $r.ConfigSHA256 -ne (Get-FileHash "$profile\config.json").Hash -or $r.StateSHA256 -ne (Get-FileHash "$profile\state.json").Hash -or (Test-Path "$profile\maintenance.json")){throw 'Stale or mismatched launch check'}
  $si=New-Object Diagnostics.ProcessStartInfo;$si.FileName=$Executable;$si.UseShellExecute=$false;$si.WorkingDirectory=Split-Path $Executable -Parent
+ $ApplicationArguments=@(Get-UniversalLaunchArguments $c $Executable $ApplicationArguments)
  # Quote individual native arguments using Windows CommandLineToArgvW rules.
  $quoted=@(foreach($a in $ApplicationArguments){'"'+[regex]::Replace([regex]::Replace($a,'(\\*)"','$1$1\"'),'(\\+)$','$1$1')+'"'})
  $si.Arguments=$quoted -join ' '

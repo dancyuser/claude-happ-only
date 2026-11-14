@@ -26,6 +26,8 @@ if((@(Get-OtherPorts 65535)-join ',') -ne '1-65534'){throw 'Upper port bound mis
 & "$PSScriptRoot\Test-LaunchTicket.ps1"
 & "$PSScriptRoot\Test-LauncherPreflight.ps1"
 & "$PSScriptRoot\Test-Universal.ps1"
+& "$PSScriptRoot\Test-EndpointDiscovery.ps1"
+& "$PSScriptRoot\Test-ClaudeTun.ps1"
 foreach($item in (Get-Content -Raw "$root\payload-hashes.json" | ConvertFrom-Json)){
  $path=Join-Path $root $item.Name;if((Get-FileHash -LiteralPath $path).Hash -ne $item.SHA256){throw ('Payload checksum mismatch: '+$item.Name)}
 }
