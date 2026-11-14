@@ -3,6 +3,7 @@
 Основная документация теперь находится в [README.md](README.md).
 
 - [Установка на новом Windows 11 ПК](SETUP-ru.md)
+- [Claude TUN Only без IP сервера](CLAUDE-TUN-ru.md)
 - [Устройство защиты и ограничения](GUIDE-ru.md)
 - [AppID: компилятор, установка политики и проверка потомков](APPID-ru.md)
 - [Диагностика и типовые исправления](TROUBLESHOOTING-ru.md)

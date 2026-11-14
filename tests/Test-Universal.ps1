@@ -19,7 +19,7 @@ if($missing.Present -or @($blocked|Where-Object Kind -ne 'Block').Count){throw '
 $strict=$c|ConvertTo-Json -Depth 12|ConvertFrom-Json;$strict.KillSwitchScope='InterfaceAndCore'
 $strict|Add-Member NoteProperty VpnCore ([pscustomobject]@{Executable=$core;ServerAddress='192.0.2.1';ServerPort=51820;ServerProtocol='UDP'})
 $strict=ConvertTo-UniversalProfile $strict;$strictPlan=@(New-UniversalPlan $strict $binding $probe)
-if(-not @($strictPlan|Where-Object {$_.Path -eq $core -and $_.Kind -eq 'Endpoint' -and $_.Address -eq '192.0.2.1' -and $_.Protocol -eq 17}).Count){throw 'Strict VPN core can fall back to arbitrary destinations'}
+if(-not @($strictPlan|Where-Object {$_.Path -eq $core -and $_.Kind -eq 'Endpoint' -and $_.Address -eq '192.0.2.1' -and $_.Protocol -eq 17}).Count){throw ('Strict VPN core plan mismatch. Expected path='+$core+'; plan='+($strictPlan|ConvertTo-Json -Depth 5 -Compress))}
 $noCore=$strict|ConvertTo-Json -Depth 12|ConvertFrom-Json;$noCore.PSObject.Properties.Remove('VpnCore');$rejected=$false;try{$null=ConvertTo-UniversalProfile $noCore}catch{$rejected=$true};if(-not $rejected){throw 'Strict scope silently weakened without VPN core'}
 $noScope=$base|ConvertTo-Json -Depth 12|ConvertFrom-Json;$noScope.PSObject.Properties.Remove('KillSwitchScope');$rejected=$false;try{$null=ConvertTo-UniversalProfile $noScope}catch{$rejected=$true};if(-not $rejected){throw 'Missing scope silently selected weaker kill switch'}
 $refused=$false;try{$a.HardwareInterface=$true;$null=Resolve-UniversalBinding $c @($a)}catch{$refused=$true};if(-not $refused){throw 'Physical adapter accepted as TUN'};$a.HardwareInterface=$false

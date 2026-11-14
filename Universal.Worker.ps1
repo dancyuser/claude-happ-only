@@ -1,6 +1,6 @@
 ﻿#requires -Version 5.1
 # Elevated worker. Only its private diagnostic curl can be executed here.
-param([ValidateSet('Install','Verify','Test','Restore')][string]$Mode,[Parameter(Mandatory)][guid]$ProfileId,[Parameter(Mandatory)][guid]$RequestId,[string]$ConfigurationFile,[string]$ConfigSHA256,[guid]$BackupId)
+param([ValidateSet('Install','Verify','Test','Restore')][string]$Mode,[Parameter(Mandatory)][guid]$ProfileId,[Parameter(Mandatory)][guid]$RequestId,[string]$ConfigurationFile,[string]$ConfigSHA256,[guid]$BackupId,[string]$EngineLibrary,[string]$EngineSHA256)
 $ErrorActionPreference='Stop'
 . "$PSScriptRoot\Common.ps1";. "$PSScriptRoot\BackupRestore.ps1";. "$PSScriptRoot\Universal.Common.ps1"
 $engine=$null;$mutex=$null;$locked=$false;$report=$null;$result=[ordered]@{Status='FAIL';Mode=$Mode;ProfileId=$ProfileId.ToString();ClaudeLaunched=$false;ApplicationsLaunched=$false;Error=''}
@@ -8,7 +8,7 @@ $committed=$false;$old=$null;$newKeys=@();$profile=$null;$maintenanceStarted=$fa
 function Save-U($Value,$Path){$Value|ConvertTo-Json -Depth 20|Set-Content -LiteralPath $Path -Encoding UTF8}
 function Backup-U {
  $id=[guid]::NewGuid().ToString();$dir=Join-Path $profile ('Backups\'+$id);Set-ProtectedDirectory $dir
- $entries=@();foreach($name in @('config.json','state.json','Diagnostic-curl.exe','Universal.Common.ps1','Universal.Worker.ps1','Universal.Wfp.cs','Universal-Guard.ps1','Start-Universal.ps1','Common.ps1','BackupRestore.ps1')){
+ $entries=@();foreach($name in @('config.json','state.json','Diagnostic-curl.exe','Universal.Common.ps1','Universal.Worker.ps1','Universal.Wfp.cs','Universal.Engine.dll','Universal-Guard.ps1','Start-Universal.ps1','Common.ps1','BackupRestore.ps1')){
   $path=Join-Path $profile $name;if(Test-Path -LiteralPath $path){Assert-UniversalPlainPath $path;Copy-Item -LiteralPath $path -Destination (Join-Path $dir $name);$entries+=@([pscustomobject]@{Name=$name;SHA256=(Get-FileHash -LiteralPath $path).Hash})}
  }
  Save-U ([pscustomobject]@{ProfileId=$ProfileId.ToString();Machine=(Get-MachineBinding);HadState=[bool]$old;Files=$entries}) "$dir\manifest.json"
@@ -18,7 +18,7 @@ function Read-UBackup([string]$Dir){
  Assert-UniversalPlainPath $Dir;Assert-ProtectedBackupItem $Dir;Assert-ProtectedBackupItem "$Dir\manifest.json"
  $meta=Get-Content "$Dir\manifest.json" -Raw|ConvertFrom-Json
  if($meta.ProfileId -ne $ProfileId.ToString() -or $meta.Machine -ne (Get-MachineBinding)){throw 'Backup machine/profile mismatch'}
- $allowed=@('config.json','state.json','Diagnostic-curl.exe','Universal.Common.ps1','Universal.Worker.ps1','Universal.Wfp.cs','Universal-Guard.ps1','Start-Universal.ps1','Common.ps1','BackupRestore.ps1')
+ $allowed=@('config.json','state.json','Diagnostic-curl.exe','Universal.Common.ps1','Universal.Worker.ps1','Universal.Wfp.cs','Universal.Engine.dll','Universal-Guard.ps1','Start-Universal.ps1','Common.ps1','BackupRestore.ps1')
  foreach($f in $meta.Files){if($f.Name -notin $allowed){throw 'Unexpected backup entry'};$p=Join-Path $Dir $f.Name;Assert-ProtectedBackupItem $p;if((Get-FileHash -LiteralPath $p).Hash -ne $f.SHA256){throw 'Backup checksum mismatch'}}
  return $meta
 }
@@ -39,7 +39,19 @@ try{
  if($c.ProfileId -ne $ProfileId.ToString()){throw 'Wrong profile ID'}
  if($Mode -in @('Install','Restore')){Assert-UniversalClientsClosed $c}
  if(Test-Path "$profile\state.json"){$old=Get-Content "$profile\state.json" -Raw|ConvertFrom-Json;if($old.Machine -ne (Get-MachineBinding) -or $old.ProfileId -ne $ProfileId.ToString()){throw 'Installed state machine/profile mismatch'}}
- if(-not ('UniversalWfp' -as [type])){Add-Type -Path "$PSScriptRoot\Universal.Wfp.cs"}
+ # Compile as the ordinary user; only load a checksum-bound library after UAC.
+ $enginePath=Join-Path $profile 'Universal.Engine.dll'
+ if($Mode -eq 'Install'){
+  if(-not $EngineLibrary -or $EngineSHA256 -notmatch '^[A-Fa-f0-9]{64}$'){throw 'Prepared WFP engine required'}
+  Assert-UniversalPlainPath $EngineLibrary
+  if((Get-FileHash -LiteralPath $EngineLibrary).Hash -ne $EngineSHA256){throw 'Prepared WFP engine changed during elevation'}
+  $enginePath=Join-Path $report 'Universal.Engine.dll';Copy-Item -LiteralPath $EngineLibrary -Destination $enginePath
+  if((Get-FileHash -LiteralPath $enginePath).Hash -ne $EngineSHA256){throw 'Protected WFP engine copy mismatch'}
+ }else{
+  $savedEngine=@($old.Runtime|Where-Object Name -eq 'Universal.Engine.dll')
+  if($savedEngine.Count -ne 1 -or (Get-FileHash -LiteralPath $enginePath).Hash -ne $savedEngine[0].SHA256){throw 'Prepared WFP engine absent/changed; reinstall with the current installer'}
+ }
+ $null=[Reflection.Assembly]::LoadFrom($enginePath)
  $engine=[UniversalWfp]::new($ProfileId.ToString())
  if($Mode -eq 'Restore'){
   $dir=Join-Path $profile ('Backups\'+$BackupId.ToString());$meta=Read-UBackup $dir
@@ -64,8 +76,8 @@ try{
    foreach($p in @($c.Programs)+$(if($c.Mode -eq 'TunProxy'){@($c.Proxy.Executable)}elseif($c.KillSwitchScope -eq 'InterfaceAndCore'){@($c.VpnCore.Executable)}else{@()})){if(-not(Test-Path -LiteralPath $p -PathType Leaf)){throw ('EXE missing: '+$p)}}
    Set-ProtectedDirectory $profile;$backup=Backup-U
    Save-U @{Reason='Install';Request=$RequestId.ToString();Plan=$plan} "$profile\maintenance.json";$maintenanceStarted=$true
-   $runtime=@('Universal.Common.ps1','Universal.Worker.ps1','Universal.Wfp.cs','Universal-Guard.ps1','Start-Universal.ps1','Common.ps1','BackupRestore.ps1')
-   foreach($name in $runtime){$from=Join-Path $PSScriptRoot $name;$to=Join-Path $profile $name;if($from -ine $to){Copy-Item -LiteralPath $from -Destination $to -Force};Set-ProtectedFile $to}
+   $runtime=@('Universal.Common.ps1','Universal.Worker.ps1','Universal.Wfp.cs','Universal.Engine.dll','Universal-Guard.ps1','Start-Universal.ps1','Common.ps1','BackupRestore.ps1')
+   foreach($name in $runtime){$from=if($name -eq 'Universal.Engine.dll'){$enginePath}else{Join-Path $PSScriptRoot $name};$to=Join-Path $profile $name;if($from -ine $to){Copy-Item -LiteralPath $from -Destination $to -Force};Set-ProtectedFile $to}
    Copy-Item -LiteralPath "$env:SystemRoot\System32\curl.exe" -Destination $probe -Force;Set-ProtectedFile $probe
    Save-U $c "$profile\config.json";Set-ProtectedFile "$profile\config.json"
    $engine.Begin();$newKeys=@(Set-UniversalRules $engine $plan)
@@ -80,13 +92,14 @@ try{
    if($Mode -eq 'Install'){$old=$state}
    if(-not $old -or (Test-Path "$profile\maintenance.json")){throw 'Profile absent or maintenance incomplete'}
    if((Get-FileHash "$profile\config.json").Hash -ne $old.ConfigSHA256 -or (Get-FileHash $probe).Hash -ne $old.ProbeSHA256){throw 'Installed config/probe checksum mismatch'}
-   foreach($f in $old.Runtime){if($f.Name -notin @('Universal.Common.ps1','Universal.Worker.ps1','Universal.Wfp.cs','Universal-Guard.ps1','Start-Universal.ps1','Common.ps1','BackupRestore.ps1') -or (Get-FileHash (Join-Path $profile $f.Name)).Hash -ne $f.SHA256){throw 'Installed runtime checksum mismatch'}}
+   foreach($f in $old.Runtime){if($f.Name -notin @('Universal.Common.ps1','Universal.Worker.ps1','Universal.Wfp.cs','Universal.Engine.dll','Universal-Guard.ps1','Start-Universal.ps1','Common.ps1','BackupRestore.ps1') -or (Get-FileHash (Join-Path $profile $f.Name)).Hash -ne $f.SHA256){throw 'Installed runtime checksum mismatch'}}
    $engine.VerifyOnly=$true;$keys=@(Set-UniversalRules $engine $plan)
    if((@($keys|Sort-Object)-join ',') -ne (@($old.Keys|Sort-Object)-join ',')){throw 'Interface or policy changed: reinstall this profile; no adapter selected by name'}
    if(-not $binding.Up){throw 'Selected interface is absent/down; restrictions retained'}
    $result.Status='VERIFIED';$result['Ready']=$false
    if($Mode -in @('Install','Test')){
-    $arguments=@('--ipv4','--noproxy','*')
+    $resolveArguments=@();if($c.Mode -eq 'TunOnly'){$resolveArguments=@(Get-UniversalProbeResolveArguments @('www.cloudflare.com','api.ipify.org'))}
+    $arguments=@('--ipv4','--noproxy','*')+@($resolveArguments)
     if($c.Mode -eq 'TunProxy'){
      $listen=@(Get-NetTCPConnection -LocalAddress '127.0.0.1' -LocalPort ([int]$c.Proxy.Port) -State Listen -ErrorAction SilentlyContinue)
      if($listen.Count -ne 1){throw 'Configured loopback proxy is not listening'}
@@ -97,15 +110,15 @@ try{
     $a=Invoke-UniversalCurl $probe (@($arguments)+@('https://www.cloudflare.com/cdn-cgi/trace'))
     $b=Invoke-UniversalCurl $probe (@($arguments)+@('https://api.ipify.org'))
     $ip='';$country='';foreach($line in ($a.Body -split '\r?\n')){if($line -match '^ip=(.+)$'){$ip=$matches[1]};if($line -match '^loc=(.+)$'){$country=$matches[1]}}
-    $result['Transport']=[pscustomobject]@{Trace=$a;Ipify=$b;IP=$ip;Country=$country}
-    if($a.Code -ne 0 -or $b.Code -ne 0 -or -not $ip -or $ip -ne $b.Body -or ($c.ExpectedCountry -and $country -ne $c.ExpectedCountry)){throw 'Protected probe failed IP/country consistency check'}
+    $result['Transport']=[pscustomobject]@{Trace=$a;Ipify=$b;IP=$ip;Country=$country;SplitRoutingObserved=($ip -ne $b.Body)}
+    if($a.Code -ne 0 -or $b.Code -ne 0 -or -not (Test-UniversalProbeConsistency $c $ip $country $b.Body)){throw 'Protected probe failed IP/country consistency check'}
     if($c.Mode -eq 'TunProxy'){$negative=Invoke-UniversalCurl $probe @('--ipv4','--noproxy','*','https://api.ipify.org')}
     else{
      $other=@(Get-NetAdapter -IncludeHidden | Where-Object {$_.Status -eq 'Up' -and $_.HardwareInterface -and ([string]$_.InterfaceGuid).Trim('{}') -ine $binding.Guid}|Sort-Object ifIndex|Select-Object -First 1)
      if(-not $other.Count){throw 'No other physical adapter available for bypass test; no launch approval'}
      $addr=@(Get-NetIPAddress -InterfaceIndex $other[0].ifIndex -AddressFamily IPv4|Where-Object {$_.IPAddress -notlike '169.254.*'}|Select-Object -First 1)
      if(-not $addr.Count){throw 'No physical IPv4 for bypass test'}
-     $negative=Invoke-UniversalCurl $probe @('--ipv4','--interface',$addr[0].IPAddress,'--noproxy','*','https://api.ipify.org')
+     $negative=Invoke-UniversalCurl $probe (@('--ipv4','--interface',$addr[0].IPAddress,'--noproxy','*')+@($resolveArguments)+@('https://api.ipify.org'))
     }
     $result['BypassTest']=$negative;if($negative.Code -eq 0){throw 'BYPASS DETECTED: no launch approval'}
     $engine.VerifyOnly=$false;$faultKeys=@()

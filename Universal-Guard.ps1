@@ -29,11 +29,16 @@ try{
   if($c.Mode -eq 'TunOnly'){
    $c|Add-Member NoteProperty TunnelInterfaceGuid (Choose-UInterface 'Select the virtual TUN adapter')
    $c.AllowIPv6=((Ask-U 'Permit IPv6 through this TUN? y/N' 'N') -match '^[yY]')
-   Write-Host 'Strict mode also locks the VPN network core to one server endpoint. This affects all traffic handled by that core.'
-   $strict=Ask-U '1 = interface + VPN core endpoint; 2 = interface only (does not prevent DIRECT fallback inside the VPN)' '1'
+   Write-Host 'Interface-only locks client connections to the selected TUN; no VPN server IP is needed.'
+   Write-Host 'Optional core endpoint lock also affects every other application using that VPN core.'
+   $strict=Ask-U '1 = interface + VPN core endpoint; 2 = interface only (VPN controls routing inside the TUN)' '2'
    if($strict -notin @('1','2')){throw 'Choose 1 or 2'}
    $c|Add-Member NoteProperty KillSwitchScope $(if($strict -eq '1'){'InterfaceAndCore'}else{'InterfaceOnly'})
-   if($strict -eq '1'){$c|Add-Member NoteProperty VpnCore ([pscustomobject]@{Executable=((Read-Host 'VPN network-core EXE path (not necessarily the GUI)').Trim('"'));ServerAddress=(Read-Host 'Pinned VPN server IPv4/IPv6');ServerPort=(Ask-U 'VPN server port' '443');ServerProtocol=(Ask-U 'VPN upstream protocol: TCP or UDP' 'UDP').ToUpperInvariant()})}
+   if($strict -eq '1'){
+    $corePath=(Read-Host 'VPN network-core EXE path (not necessarily the GUI)').Trim('"')
+    if(-not [IO.Path]::IsPathRooted($corePath) -or [IO.Path]::GetExtension($corePath) -ine '.exe' -or $corePath -match '[*?]' -or -not (Test-Path -LiteralPath $corePath -PathType Leaf)){throw 'Select the existing VPN network-core EXE'}
+    $c|Add-Member NoteProperty VpnCore (Read-UniversalVpnEndpoint $corePath $c.TunnelInterfaceGuid)
+   }
   }else{
    $c|Add-Member NoteProperty TransportInterfaceGuid (Choose-UInterface 'Select the underlying adapter for the independent proxy core (usually Ethernet/Wi-Fi)')
    $scheme=Ask-U 'Local proxy protocol: http or socks5h' 'http'
@@ -62,15 +67,22 @@ try{
  $id=[guid]::NewGuid();$args='-NoProfile -ExecutionPolicy Bypass -File "'+$PSScriptRoot+'\Universal.Worker.ps1" -Mode '+$Mode+' -ProfileId '+$ProfileId+' -RequestId '+$id
  $manifestPath=Join-Path $PSScriptRoot 'payload-hashes.json'
  if(Test-Path -LiteralPath $manifestPath){foreach($entry in (Get-Content $manifestPath -Raw|ConvertFrom-Json)){if((Get-FileHash -LiteralPath (Join-Path $PSScriptRoot $entry.Name)).Hash -ne $entry.SHA256){throw ('Source payload changed: '+$entry.Name)}}}
+ if($Mode -eq 'Install'){
+  $preparedEngine=& "$PSScriptRoot\Prepare-UniversalEngine.ps1"
+  $args+=' -EngineLibrary "'+$preparedEngine.Path+'" -EngineSHA256 '+$preparedEngine.SHA256
+ }
  if($temp){$args+=' -ConfigurationFile "'+$temp+'" -ConfigSHA256 '+(Get-FileHash $temp).Hash}
  if($Mode -eq 'Restore'){if($BackupId -eq [guid]::Empty){throw 'Restore requires a BackupId listed in the installation report'};$args+=' -BackupId '+$BackupId}
  Write-Host 'UAC: scoped network profile maintenance/test only. Protected applications are not launched.'
  $code=Invoke-ElevatedPowerShell $args
- Write-Host ('Report: '+(Join-Path (Get-UniversalRoot) ('Reports\'+$id+'\result.json')))
+ $resultPath=Join-Path (Get-UniversalRoot) ('Reports\'+$id+'\result.json')
+ if(-not(Test-Path -LiteralPath $resultPath)){throw ('Administrative worker ended without a report (exit '+$code+'). Restrictions may already be installed. Review antivirus/system event history before retrying.')}
+ Write-Host ('Report: '+$resultPath)
  if($Mode -eq 'Install' -and $code -eq 0){
   Write-Host ('Profile installed and tested. ProfileId='+$ProfileId)
   try{
-   $shortcutPath=Join-Path ([Environment]::GetFolderPath('Desktop')) ('Network Guard - '+$ProfileId+'.lnk')
+   $shortcutName=if($c.Name -eq 'Claude TUN Only'){'Claude - TUN Only.lnk'}else{'Network Guard - '+$ProfileId+'.lnk'}
+   $shortcutPath=Join-Path ([Environment]::GetFolderPath('Desktop')) $shortcutName
    $shell=New-Object -ComObject WScript.Shell;$shortcut=$shell.CreateShortcut($shortcutPath)
    $target="$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
    $profileRoot=Join-Path (Get-UniversalRoot) ('Profiles\'+$ProfileId)
